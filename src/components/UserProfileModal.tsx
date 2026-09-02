@@ -329,13 +329,31 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-colors cursor-pointer"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            {onLogout && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onLogout();
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600/30 hover:bg-red-600 text-red-100 hover:text-white border border-red-400/50 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs"
+                title="تسجيل الخروج من الحساب والعودة للواجهة الرئيسية"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>تسجيل خروج</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-colors cursor-pointer"
+              title="إغلاق"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Cloud Status Banner */}

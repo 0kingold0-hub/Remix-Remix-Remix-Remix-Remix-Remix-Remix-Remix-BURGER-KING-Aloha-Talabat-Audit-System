@@ -119,20 +119,35 @@ export const Header: React.FC<HeaderProps> = ({
                 <Laptop className="w-4 h-4 text-[#D71920]" />
               </button>
 
-              {currentUser && onOpenProfile ? (
-                <button 
-                  type="button"
-                  onClick={onOpenProfile}
-                  className="flex items-center gap-1.5 px-2.5 py-1 bg-stone-900 border border-amber-500/40 rounded-xl shadow-xs text-xs font-bold text-amber-100 cursor-pointer"
-                >
-                  <Crown className="w-3.5 h-3.5 text-amber-400" />
-                  <span>{currentUser.name}</span>
-                </button>
+              {currentUser ? (
+                <div className="flex items-center gap-1.5">
+                  {onOpenProfile && (
+                    <button 
+                      type="button"
+                      onClick={onOpenProfile}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 bg-stone-900 border border-amber-500/40 rounded-xl shadow-xs text-xs font-bold text-amber-100 cursor-pointer"
+                    >
+                      <Crown className="w-3.5 h-3.5 text-amber-400" />
+                      <span>{currentUser.name}</span>
+                    </button>
+                  )}
+                  {onLogout && (
+                    <button
+                      type="button"
+                      onClick={onLogout}
+                      className="flex items-center gap-1 px-2.5 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl shadow-xs text-xs font-bold cursor-pointer"
+                      title="تسجيل الخروج من الحساب"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span>خروج</span>
+                    </button>
+                  )}
+                </div>
               ) : onOpenLoginModal ? (
                 <button 
                   type="button"
                   onClick={onOpenLoginModal}
-                  className="flex items-center gap-1 px-2.5 py-1 bg-amber-50 border border-amber-300 rounded-xl shadow-xs text-xs font-bold text-amber-900 cursor-pointer"
+                  className="flex items-center gap-1 px-2.5 py-1.5 bg-amber-50 border border-amber-300 rounded-xl shadow-xs text-xs font-bold text-amber-900 cursor-pointer"
                 >
                   <Crown className="w-3.5 h-3.5 text-amber-600" />
                   <span>دخول الآدمن</span>
@@ -157,7 +172,7 @@ export const Header: React.FC<HeaderProps> = ({
 
             {/* Logged in User Pill or Admin Login Button */}
             {currentUser ? (
-              <div className="hidden lg:flex items-center gap-2 pr-2 border-l border-stone-200 mr-1">
+              <div className="hidden sm:flex items-center gap-2 pr-2 border-l border-stone-200 mr-1">
                 <button
                   type="button"
                   onClick={onOpenProfile}
@@ -182,19 +197,20 @@ export const Header: React.FC<HeaderProps> = ({
                   <button
                     type="button"
                     onClick={onLogout}
-                    className="p-2 text-stone-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all cursor-pointer"
-                    title="Sign Out"
+                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-red-600 hover:text-white bg-red-50 hover:bg-red-600 border border-red-200 hover:border-red-600 rounded-xl transition-all cursor-pointer shadow-xs"
+                    title="تسجيل الخروج من الحساب"
                   >
                     <LogOut className="w-4 h-4" />
+                    <span>تسجيل خروج</span>
                   </button>
                 )}
               </div>
             ) : onOpenLoginModal ? (
-              <div className="hidden lg:flex items-center gap-2 pr-2 border-l border-stone-200 mr-1">
+              <div className="hidden sm:flex items-center gap-2 pr-2 border-l border-stone-200 mr-1">
                 <button
                   type="button"
                   onClick={onOpenLoginModal}
-                  className="flex items-center gap-2 px-3 py-1.5 bg-stone-900 hover:bg-black text-amber-300 border border-amber-500/40 rounded-xl text-xs font-black transition-all cursor-pointer shadow-xs"
+                  className="flex items-center gap-2 px-3.5 py-2 bg-gradient-to-r from-stone-900 to-stone-950 hover:from-black hover:to-stone-900 text-amber-300 border border-amber-500/40 rounded-xl text-xs font-black transition-all cursor-pointer shadow-xs"
                 >
                   <Crown className="w-3.5 h-3.5 text-amber-400" />
                   <span>دخول المدير العام</span>

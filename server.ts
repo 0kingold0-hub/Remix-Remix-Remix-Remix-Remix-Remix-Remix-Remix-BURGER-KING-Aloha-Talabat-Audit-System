@@ -965,19 +965,34 @@ app.get('/api/license/status', (req, res) => {
 
   // First time this device connects: start 24-hour trial!
   if (!device) {
-    device = {
-      deviceId,
-      firstSeenAt: now,
-      trialDurationMs: TRIAL_DURATION_MS,
-      trialExpiresAt: now + TRIAL_DURATION_MS,
-      isActivated: false,
-      planType: 'trial',
-      lastSeenAt: now,
-      ip: clientIp,
-      deviceName,
-    };
-    store.devices[deviceId] = device;
-    saveLicenseStore(store);
+    // Check if another device record matches this IP & deviceName from recent activity (prevents timer reset on iframe reload)
+    const existingMatch = Object.values(store.devices).find(
+      d => d.ip === clientIp && d.ip !== '127.0.0.1' && (now - d.firstSeenAt < 72 * 3600000)
+    );
+
+    if (existingMatch) {
+      device = {
+        ...existingMatch,
+        deviceId,
+        lastSeenAt: now,
+      };
+      store.devices[deviceId] = device;
+      saveLicenseStore(store);
+    } else {
+      device = {
+        deviceId,
+        firstSeenAt: now,
+        trialDurationMs: TRIAL_DURATION_MS,
+        trialExpiresAt: now + TRIAL_DURATION_MS,
+        isActivated: false,
+        planType: 'trial',
+        lastSeenAt: now,
+        ip: clientIp,
+        deviceName,
+      };
+      store.devices[deviceId] = device;
+      saveLicenseStore(store);
+    }
   } else {
     // Update last seen
     device.lastSeenAt = now;
@@ -985,6 +1000,11 @@ app.get('/api/license/status', (req, res) => {
     if (deviceName) device.deviceName = deviceName;
     saveLicenseStore(store);
   }
+
+  // Preserve device ID cookie
+  try {
+    res.setHeader('Set-Cookie', `bk_dev_id=${device.deviceId}; Path=/; Max-Age=31536000; SameSite=Lax`);
+  } catch {}
 
   // Check status
   let status: 'trial' | 'active' | 'expired' = 'trial';

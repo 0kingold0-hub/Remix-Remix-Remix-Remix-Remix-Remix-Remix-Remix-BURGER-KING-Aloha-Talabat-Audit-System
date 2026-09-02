@@ -12,16 +12,23 @@ export const TrialBanner: React.FC<TrialBannerProps> = ({
   licenseInfo,
   onOpenUpgradeModal,
 }) => {
-  const [remainingMs, setRemainingMs] = useState(licenseInfo.remainingMs);
+  const calcRemaining = () => {
+    if (licenseInfo.trialExpiresAt && licenseInfo.trialExpiresAt > 0) {
+      return Math.max(0, licenseInfo.trialExpiresAt - Date.now());
+    }
+    return Math.max(0, licenseInfo.remainingMs);
+  };
+
+  const [remainingMs, setRemainingMs] = useState(calcRemaining);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    setRemainingMs(licenseInfo.remainingMs);
+    setRemainingMs(calcRemaining());
     const interval = setInterval(() => {
-      setRemainingMs(prev => Math.max(0, prev - 1000));
+      setRemainingMs(calcRemaining());
     }, 1000);
     return () => clearInterval(interval);
-  }, [licenseInfo.remainingMs]);
+  }, [licenseInfo.trialExpiresAt, licenseInfo.remainingMs]);
 
   // If already full active and not in trial mode, do not display banner
   if (licenseInfo.status === 'active' && !licenseInfo.remainingMs) {

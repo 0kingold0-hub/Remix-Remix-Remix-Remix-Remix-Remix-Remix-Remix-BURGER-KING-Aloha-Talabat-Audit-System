@@ -243,3 +243,50 @@ export interface ReconciliationSummary {
   excelPaymentSummary?: ExcelPaymentSummary;
 }
 
+export interface DeviceLicenseInfo {
+  deviceId: string;
+  status: 'trial' | 'active' | 'expired';
+  isExpired: boolean;
+  trialStartedAt: number;
+  trialExpiresAt: number;
+  remainingMs: number;
+  priceEgp: number;
+  planType?: 'trial' | 'annual' | 'lifetime' | 'monthly' | 'semi_annual' | 'custom';
+  licenseKey?: string;
+  licenseExpiresAt?: number;
+  clientName?: string;
+  contactPhone: string;
+  isMaster: boolean;
+  activatedAt?: number;
+}
+
+export interface StoredDeviceEntry {
+  deviceId: string;
+  firstSeenAt: number;
+  trialExpiresAt: number;
+  remainingMs: number;
+  status: 'trial' | 'active' | 'expired';
+  isActivated: boolean;
+  licenseKey?: string;
+  licenseExpiresAt?: number;
+  planType?: string;
+  clientName?: string;
+  ip: string;
+  deviceName: string;
+  lastSeenAt: number;
+}
+
+export interface GeneratedLicenseRecord {
+  key: string;
+  deviceId: string;
+  clientName: string;
+  planType: 'annual' | 'lifetime' | 'monthly' | 'custom';
+  priceEgp: number;
+  createdAt: number;
+  expiresAt: number;
+  generatedBy: string;
+  notes?: string;
+  usedAt?: number;
+  isActive: boolean;
+}
+

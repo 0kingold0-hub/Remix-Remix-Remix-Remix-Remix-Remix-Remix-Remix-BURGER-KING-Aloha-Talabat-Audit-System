@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import { GoogleGenAI, Type } from '@google/genai';
 
@@ -717,6 +718,641 @@ app.post('/api/auth/logout', (req, res) => {
   }
 
   res.json({ success: true });
+});
+
+// ==================== LICENSE & TRIAL MANAGEMENT SYSTEM ====================
+
+const LICENSE_STORE_FILE = path.join(DATA_DIR, 'license-store.json');
+const TRIAL_DURATION_MS = 24 * 60 * 60 * 1000; // 24 Hours Free Trial
+const DEFAULT_LICENSE_PRICE_EGP = 5000; // 5,000 EGP License
+const MASTER_CONTACT_PHONE = '01100051593';
+
+interface DeviceRecord {
+  deviceId: string;
+  firstSeenAt: number;
+  trialDurationMs: number;
+  trialExpiresAt: number;
+  isActivated: boolean;
+  activatedAt?: number;
+  licenseKey?: string;
+  licenseExpiresAt?: number;
+  planType: 'trial' | 'annual' | 'lifetime' | 'monthly' | 'semi_annual' | 'custom';
+  clientName?: string;
+  branchName?: string;
+  phone?: string;
+  notes?: string;
+  lastSeenAt: number;
+  ip: string;
+  deviceName: string;
+}
+
+interface StoredLicenseRecord {
+  key: string;
+  deviceId: string;
+  clientName: string;
+  planType: 'annual' | 'lifetime' | 'monthly' | 'semi_annual' | 'custom';
+  priceEgp: number;
+  createdAt: number;
+  expiresAt: number;
+  generatedBy: string;
+  notes?: string;
+  usedAt?: number;
+  isActive: boolean;
+}
+
+interface LicenseStoreData {
+  masterSecret: string;
+  defaultPriceEgp: number;
+  devices: Record<string, DeviceRecord>;
+  licenses: Record<string, StoredLicenseRecord>;
+}
+
+function getLicenseStore(): LicenseStoreData {
+  try {
+    if (!fs.existsSync(LICENSE_STORE_FILE)) {
+      const initialStore: LicenseStoreData = {
+        masterSecret: 'bk_king_master_secret_' + Math.random().toString(36).substring(2, 15),
+        defaultPriceEgp: DEFAULT_LICENSE_PRICE_EGP,
+        devices: {},
+        licenses: {},
+      };
+      fs.writeFileSync(LICENSE_STORE_FILE, JSON.stringify(initialStore, null, 2), 'utf-8');
+      return initialStore;
+    }
+    const raw = fs.readFileSync(LICENSE_STORE_FILE, 'utf-8');
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error('Error reading license store', err);
+    return {
+      masterSecret: 'bk_king_master_secret_fallback',
+      defaultPriceEgp: DEFAULT_LICENSE_PRICE_EGP,
+      devices: {},
+      licenses: {},
+    };
+  }
+}
+
+function saveLicenseStore(store: LicenseStoreData): void {
+  try {
+    fs.writeFileSync(LICENSE_STORE_FILE, JSON.stringify(store, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Error saving license store', err);
+  }
+}
+
+// Generate deterministic & cryptographically signed license keys
+function generateLicenseKey(
+  deviceId: string,
+  planType: 'annual' | 'lifetime' | 'monthly' | 'semi_annual' | 'custom',
+  durationDays: number
+): { key: string; expiresAt: number } {
+  const store = getLicenseStore();
+  const cleanId = (deviceId || '').trim().toUpperCase();
+  const now = Date.now();
+  const expiresAt = durationDays > 0 ? now + durationDays * 24 * 60 * 60 * 1000 : 0; // 0 = Lifetime
+  
+  const expChunk = expiresAt > 0 
+    ? Math.floor(expiresAt / 86400000).toString(16).toUpperCase().padStart(4, '0') 
+    : 'LIFE';
+  const devChunk = cleanId.replace(/[^A-Z0-9]/g, '').slice(-4).padStart(4, 'X');
+  const salt = crypto.randomBytes(2).toString('hex').toUpperCase();
+
+  const hmac = crypto.createHmac('sha256', store.masterSecret);
+  hmac.update(`${cleanId}:${planType}:${expChunk}:${salt}`);
+  const signature = hmac.digest('hex').slice(0, 4).toUpperCase();
+
+  const key = `BK-LIC-${salt}-${expChunk}-${devChunk}-${signature}`;
+  return { key, expiresAt };
+}
+
+// Validate license key for a given device
+function verifyLicenseKey(
+  key: string,
+  deviceId: string
+): { valid: boolean; planType?: 'annual' | 'lifetime' | 'monthly' | 'semi_annual' | 'custom'; expiresAt?: number; reason?: string } {
+  const store = getLicenseStore();
+  const cleanKey = (key || '').trim().toUpperCase();
+  const cleanDevice = (deviceId || '').trim().toUpperCase();
+
+  // 1. Universal Master Bypass Keys
+  if (
+    cleanKey === 'BK-LIC-KING-1993-MASTER-LIFETIME' || 
+    cleanKey === 'BK-LIC-M-KING-01100051593' ||
+    cleanKey === 'KING-1993'
+  ) {
+    return { valid: true, planType: 'lifetime', expiresAt: 0 };
+  }
+
+  // 2. Check explicitly recorded generated keys
+  if (store.licenses[cleanKey]) {
+    const rec = store.licenses[cleanKey];
+    if (!rec.isActive) {
+      return { valid: false, reason: 'تم إلغاء أو تعطيل هذا المفتاح بواسطة الإدارة.' };
+    }
+    if (rec.deviceId && rec.deviceId.toUpperCase() !== cleanDevice && rec.deviceId !== 'UNIVERSAL') {
+      return { valid: false, reason: 'هذا المفتاح مخصص لجهاز كمبيوتر آخر ولا يمكن استخدامه على هذا الجهاز.' };
+    }
+    if (rec.expiresAt > 0 && Date.now() > rec.expiresAt) {
+      return { valid: false, reason: 'انتهت فترة صلاحية هذا الترخيص.' };
+    }
+    return { valid: true, planType: rec.planType, expiresAt: rec.expiresAt };
+  }
+
+  // 3. Cryptographic Signature Validation
+  const parts = cleanKey.split('-');
+  if (parts.length === 6 && parts[0] === 'BK' && parts[1] === 'LIC') {
+    const [_, __, salt, expChunk, devChunk, sig] = parts;
+    const devMatch = cleanDevice.replace(/[^A-Z0-9]/g, '').slice(-4).padStart(4, 'X');
+    if (devChunk !== devMatch && devChunk !== 'XXXX') {
+      return { valid: false, reason: 'كود الترخيص غير مطابق لمعرّف هذا الجهاز.' };
+    }
+
+    const plans: Array<'annual' | 'lifetime' | 'monthly' | 'semi_annual' | 'custom'> = [
+      'annual', 'lifetime', 'monthly', 'semi_annual', 'custom'
+    ];
+    for (const plan of plans) {
+      const hmac = crypto.createHmac('sha256', store.masterSecret);
+      hmac.update(`${cleanDevice}:${plan}:${expChunk}:${salt}`);
+      const expectedSig = hmac.digest('hex').slice(0, 4).toUpperCase();
+      if (expectedSig === sig) {
+        let expiresAt = 0;
+        if (expChunk !== 'LIFE') {
+          const days = parseInt(expChunk, 16);
+          if (!isNaN(days)) {
+            expiresAt = days * 86400000;
+            if (Date.now() > expiresAt) {
+              return { valid: false, reason: 'انتهت فترة صلاحية هذا الترخيص.' };
+            }
+          }
+        }
+        return { valid: true, planType: plan, expiresAt };
+      }
+    }
+  }
+
+  return { valid: false, reason: 'مفتاح الترخيص غير صالح. يرجى التأكد من نسخه بشكل دقيق.' };
+}
+
+// Check whether caller has Master Admin rights
+function isCallerMasterAdmin(req: express.Request): boolean {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.replace('Bearer ', '') || (req.query.token as string);
+  const pinHeader = (req.headers['x-master-pin'] as string) || (req.body?.masterPin as string);
+
+  if (pinHeader === MASTER_RECOVERY_PIN || pinHeader === '1993' || pinHeader === '01100051593') {
+    return true;
+  }
+
+  if (token && activeSessions.has(token)) {
+    const session = activeSessions.get(token);
+    if (session && session.username.toLowerCase() === 'king') {
+      return true;
+    }
+  }
+  return false;
+}
+
+// 1. Device License & 24-Hour Trial Status Check
+app.get('/api/license/status', (req, res) => {
+  const deviceId = ((req.query.deviceId as string) || '').trim().toUpperCase();
+  const clientIp = ((req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()) || req.socket.remoteAddress || '127.0.0.1';
+  const userAgent = (req.headers['user-agent'] as string) || '';
+  const deviceName = parseDeviceName(userAgent);
+
+  const isMaster = isCallerMasterAdmin(req);
+
+  // If Master Admin, always full access and never expired!
+  if (isMaster) {
+    res.json({
+      success: true,
+      deviceId: deviceId || 'BK-DEV-MASTER-ADMIN',
+      status: 'active',
+      isExpired: false,
+      isMaster: true,
+      trialStartedAt: Date.now() - 3600000,
+      trialExpiresAt: Date.now() + 365 * 24 * 3600000,
+      remainingMs: 365 * 24 * 3600000,
+      priceEgp: DEFAULT_LICENSE_PRICE_EGP,
+      planType: 'lifetime',
+      contactPhone: MASTER_CONTACT_PHONE,
+      clientName: 'المدير العام (Master Admin)',
+    });
+    return;
+  }
+
+  if (!deviceId) {
+    res.status(400).json({ success: false, error: 'معرّف الجهاز مطلوب (Device ID required)' });
+    return;
+  }
+
+  const store = getLicenseStore();
+  let device = store.devices[deviceId];
+  const now = Date.now();
+
+  // First time this device connects: start 24-hour trial!
+  if (!device) {
+    device = {
+      deviceId,
+      firstSeenAt: now,
+      trialDurationMs: TRIAL_DURATION_MS,
+      trialExpiresAt: now + TRIAL_DURATION_MS,
+      isActivated: false,
+      planType: 'trial',
+      lastSeenAt: now,
+      ip: clientIp,
+      deviceName,
+    };
+    store.devices[deviceId] = device;
+    saveLicenseStore(store);
+  } else {
+    // Update last seen
+    device.lastSeenAt = now;
+    device.ip = clientIp;
+    if (deviceName) device.deviceName = deviceName;
+    saveLicenseStore(store);
+  }
+
+  // Check status
+  let status: 'trial' | 'active' | 'expired' = 'trial';
+  let isExpired = false;
+  let remainingMs = 0;
+
+  if (device.isActivated) {
+    if (device.licenseExpiresAt && device.licenseExpiresAt > 0) {
+      if (now > device.licenseExpiresAt) {
+        status = 'expired';
+        isExpired = true;
+        remainingMs = 0;
+      } else {
+        status = 'active';
+        remainingMs = device.licenseExpiresAt - now;
+      }
+    } else {
+      // Lifetime license
+      status = 'active';
+      remainingMs = 999999999999;
+    }
+  } else {
+    // In Trial mode
+    if (now > device.trialExpiresAt) {
+      status = 'expired';
+      isExpired = true;
+      remainingMs = 0;
+    } else {
+      status = 'trial';
+      remainingMs = Math.max(0, device.trialExpiresAt - now);
+    }
+  }
+
+  res.json({
+    success: true,
+    deviceId: device.deviceId,
+    status,
+    isExpired,
+    trialStartedAt: device.firstSeenAt,
+    trialExpiresAt: device.trialExpiresAt,
+    remainingMs,
+    priceEgp: store.defaultPriceEgp || DEFAULT_LICENSE_PRICE_EGP,
+    planType: device.planType || 'trial',
+    licenseKey: device.licenseKey,
+    licenseExpiresAt: device.licenseExpiresAt,
+    clientName: device.clientName,
+    contactPhone: MASTER_CONTACT_PHONE,
+    isMaster: false,
+  });
+});
+
+// 2. Activate License Key
+app.post('/api/license/activate', (req, res) => {
+  const { deviceId, licenseKey, clientName } = req.body || {};
+
+  if (!deviceId || !licenseKey) {
+    res.status(400).json({ success: false, error: 'يرجى إدخال كود الجهاز ومفتاح الترخيص.' });
+    return;
+  }
+
+  const cleanDevice = deviceId.trim().toUpperCase();
+  const cleanKey = licenseKey.trim().toUpperCase();
+
+  const verification = verifyLicenseKey(cleanKey, cleanDevice);
+  if (!verification.valid) {
+    res.status(400).json({ success: false, error: verification.reason || 'مفتاح الترخيص غير صحيح أو منتهي الصلاحية.' });
+    return;
+  }
+
+  const store = getLicenseStore();
+  let device = store.devices[cleanDevice];
+  const now = Date.now();
+
+  if (!device) {
+    const clientIp = ((req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()) || req.socket.remoteAddress || '127.0.0.1';
+    device = {
+      deviceId: cleanDevice,
+      firstSeenAt: now,
+      trialDurationMs: TRIAL_DURATION_MS,
+      trialExpiresAt: now,
+      isActivated: true,
+      activatedAt: now,
+      licenseKey: cleanKey,
+      licenseExpiresAt: verification.expiresAt,
+      planType: verification.planType || 'annual',
+      clientName: clientName?.trim() || 'عميل مرخص',
+      lastSeenAt: now,
+      ip: clientIp,
+      deviceName: parseDeviceName(req.headers['user-agent'] as string || ''),
+    };
+  } else {
+    device.isActivated = true;
+    device.activatedAt = now;
+    device.licenseKey = cleanKey;
+    device.licenseExpiresAt = verification.expiresAt;
+    device.planType = verification.planType || 'annual';
+    if (clientName) device.clientName = clientName.trim();
+    device.lastSeenAt = now;
+  }
+
+  store.devices[cleanDevice] = device;
+
+  // Mark in licenses store if existing record
+  if (store.licenses[cleanKey]) {
+    store.licenses[cleanKey].usedAt = now;
+    store.licenses[cleanKey].deviceId = cleanDevice;
+  }
+
+  saveLicenseStore(store);
+
+  res.json({
+    success: true,
+    message: 'تم تفعيل النسخة الكاملة بنجاح! شكراً لاشتراكك في منظومة KING Audit.',
+    planType: device.planType,
+    licenseExpiresAt: device.licenseExpiresAt,
+    clientName: device.clientName,
+  });
+});
+
+// 3. Instant Master Admin PIN Bypass (Unlock device directly via Master PIN 1993)
+app.post('/api/license/master-bypass', (req, res) => {
+  const { pinCode, deviceId } = req.body || {};
+
+  const cleanPin = (pinCode || '').toString().trim();
+  const cleanDevice = (deviceId || '').toString().trim().toUpperCase();
+
+  if (
+    cleanPin !== MASTER_RECOVERY_PIN && 
+    cleanPin !== '1993' && 
+    cleanPin !== '01100051593'
+  ) {
+    res.status(403).json({ success: false, error: 'الرقم السري للمدير العام غير صحيح.' });
+    return;
+  }
+
+  const store = getLicenseStore();
+  const now = Date.now();
+  let device = store.devices[cleanDevice];
+
+  if (!device && cleanDevice) {
+    device = {
+      deviceId: cleanDevice,
+      firstSeenAt: now,
+      trialDurationMs: TRIAL_DURATION_MS,
+      trialExpiresAt: now + 365 * 24 * 3600000,
+      isActivated: true,
+      activatedAt: now,
+      licenseKey: 'BK-LIC-KING-1993-MASTER-LIFETIME',
+      licenseExpiresAt: 0, // Lifetime
+      planType: 'lifetime',
+      clientName: 'جهاز المدير العام (M-King Master)',
+      lastSeenAt: now,
+      ip: req.socket.remoteAddress || '127.0.0.1',
+      deviceName: parseDeviceName(req.headers['user-agent'] as string || ''),
+    };
+    store.devices[cleanDevice] = device;
+  } else if (device) {
+    device.isActivated = true;
+    device.activatedAt = now;
+    device.licenseKey = 'BK-LIC-KING-1993-MASTER-LIFETIME';
+    device.licenseExpiresAt = 0;
+    device.planType = 'lifetime';
+    device.clientName = 'جهاز المدير العام (M-King Master)';
+    device.lastSeenAt = now;
+  }
+
+  saveLicenseStore(store);
+
+  // Return fresh admin token as well so the user gets logged into the master account
+  const currentAuth = getMasterAuth();
+  const freshToken = generateToken();
+  const sessionId = 'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+  
+  activeSessions.set(freshToken, {
+    id: sessionId,
+    token: freshToken,
+    username: currentAuth.username,
+    name: currentAuth.name,
+    authVersion: currentAuth.authVersion,
+    loginTime: Date.now(),
+    lastActive: Date.now(),
+    ip: req.socket.remoteAddress || '127.0.0.1',
+    userAgent: req.headers['user-agent'] as string || '',
+    deviceName: parseDeviceName(req.headers['user-agent'] as string || ''),
+  });
+
+  res.json({
+    success: true,
+    message: 'تم تفعيل الجهاز بصفته جهاز المدير العام بنجاح!',
+    token: freshToken,
+    user: {
+      username: currentAuth.username,
+      name: currentAuth.name,
+      role: 'admin',
+      roleTitleAr: 'المدير العام',
+      roleTitleEn: 'Master Administrator',
+      branch: 'Central Headquarters & Master Core',
+    },
+  });
+});
+
+// 4. Admin: Generate Cryptographic License Key for a Client
+app.post('/api/license/admin/generate', (req, res) => {
+  if (!isCallerMasterAdmin(req)) {
+    res.status(403).json({ success: false, error: 'غير مصرح لك. هذه الخاصية متاحة للمدير العام فقط.' });
+    return;
+  }
+
+  const { deviceId, clientName, planType = 'annual', durationDays = 365, priceEgp = DEFAULT_LICENSE_PRICE_EGP, notes } = req.body || {};
+
+  if (!deviceId || deviceId.trim().length < 4) {
+    res.status(400).json({ success: false, error: 'يرجى تحديد كود الجهاز الخاص بالعميل.' });
+    return;
+  }
+
+  const cleanDevice = deviceId.trim().toUpperCase();
+  const { key, expiresAt } = generateLicenseKey(cleanDevice, planType, Number(durationDays));
+
+  const store = getLicenseStore();
+  const record: StoredLicenseRecord = {
+    key,
+    deviceId: cleanDevice,
+    clientName: clientName?.trim() || 'عميل تجاري',
+    planType,
+    priceEgp: Number(priceEgp) || DEFAULT_LICENSE_PRICE_EGP,
+    createdAt: Date.now(),
+    expiresAt,
+    generatedBy: 'M-King (Master Admin)',
+    notes: notes?.trim() || '',
+    isActive: true,
+  };
+
+  store.licenses[key] = record;
+  saveLicenseStore(store);
+
+  // Generate ready-to-send WhatsApp Message
+  const durationText = planType === 'lifetime' ? 'مدى الحياة (دائم)' : `${durationDays} يوم`;
+  const whatsappMessage = `👑 *منظومة BURGER KING & Talabat Audit - ترخيص رسمي*
+مرحباً بك أستاذ / ${record.clientName}،
+تم إصدار مفتاح تفعيل النسخة الكاملة بنجاح:
+🔑 *كود الترخيص:*
+\`${key}\`
+📱 *كود جهازك:* ${cleanDevice}
+⏳ *المدة:* ${durationText}
+💰 *المبلغ المستلم:* ${record.priceEgp.toLocaleString()} ج.م
+
+طريقة التفعيل: انسخ الكود وضعه في خانة (مفتاح التفعيل) في شاشة البرنامج واضغط (تفعيل الترخيص فوراً). شكراً لثقتكم!`;
+
+  res.json({
+    success: true,
+    licenseKey: key,
+    record,
+    whatsappMessage,
+    expiresAt,
+  });
+});
+
+// 5. Admin: List All Tracked Devices & Licenses
+app.get('/api/license/admin/devices', (req, res) => {
+  if (!isCallerMasterAdmin(req)) {
+    res.status(403).json({ success: false, error: 'غير مصرح لك.' });
+    return;
+  }
+
+  const store = getLicenseStore();
+  const now = Date.now();
+
+  const devicesList = Object.values(store.devices).map(d => {
+    let status: 'trial' | 'active' | 'expired' = 'trial';
+    let remainingMs = 0;
+
+    if (d.isActivated) {
+      if (d.licenseExpiresAt && d.licenseExpiresAt > 0) {
+        if (now > d.licenseExpiresAt) {
+          status = 'expired';
+          remainingMs = 0;
+        } else {
+          status = 'active';
+          remainingMs = d.licenseExpiresAt - now;
+        }
+      } else {
+        status = 'active';
+        remainingMs = 999999999999;
+      }
+    } else {
+      if (now > d.trialExpiresAt) {
+        status = 'expired';
+        remainingMs = 0;
+      } else {
+        status = 'trial';
+        remainingMs = Math.max(0, d.trialExpiresAt - now);
+      }
+    }
+
+    return {
+      ...d,
+      status,
+      remainingMs,
+    };
+  });
+
+  const licensesList = Object.values(store.licenses).sort((a, b) => b.createdAt - a.createdAt);
+
+  res.json({
+    success: true,
+    totalDevices: devicesList.length,
+    activeCount: devicesList.filter(d => d.status === 'active').length,
+    trialCount: devicesList.filter(d => d.status === 'trial').length,
+    expiredCount: devicesList.filter(d => d.status === 'expired').length,
+    devices: devicesList.sort((a, b) => b.lastSeenAt - a.lastSeenAt),
+    licenses: licensesList,
+  });
+});
+
+// 6. Admin: Remote Action on Device (Instant activate, extend trial, or reset)
+app.post('/api/license/admin/device-action', (req, res) => {
+  if (!isCallerMasterAdmin(req)) {
+    res.status(403).json({ success: false, error: 'غير مصرح لك.' });
+    return;
+  }
+
+  const { action, deviceId, extraHours = 24, clientName } = req.body || {};
+  if (!deviceId) {
+    res.status(400).json({ success: false, error: 'كود الجهاز مطلوب.' });
+    return;
+  }
+
+  const store = getLicenseStore();
+  const cleanDevice = deviceId.trim().toUpperCase();
+  const device = store.devices[cleanDevice];
+
+  if (!device) {
+    res.status(404).json({ success: false, error: 'الجهاز غير مسجل في النظام.' });
+    return;
+  }
+
+  const now = Date.now();
+
+  if (action === 'extend_trial') {
+    const additionalMs = Number(extraHours) * 3600000;
+    const baseTime = Math.max(now, device.trialExpiresAt);
+    device.trialExpiresAt = baseTime + additionalMs;
+    device.isActivated = false;
+    device.planType = 'trial';
+    saveLicenseStore(store);
+    res.json({
+      success: true,
+      message: `تم تمديد الفترة التجريبية للجهاز ${cleanDevice} بمقدار ${extraHours} ساعة بنجاح!`,
+      newTrialExpiresAt: device.trialExpiresAt,
+    });
+    return;
+  }
+
+  if (action === 'instant_activate') {
+    device.isActivated = true;
+    device.activatedAt = now;
+    device.licenseExpiresAt = now + 365 * 24 * 3600000; // 1 year
+    device.planType = 'annual';
+    device.licenseKey = `BK-ADMIN-INSTANT-${cleanDevice.slice(-4)}`;
+    if (clientName) device.clientName = clientName;
+    saveLicenseStore(store);
+    res.json({
+      success: true,
+      message: `تم التفعيل المباشر للجهاز ${cleanDevice} لمدة سنة كاملة بنجاح!`,
+      device,
+    });
+    return;
+  }
+
+  if (action === 'revoke') {
+    device.isActivated = false;
+    device.trialExpiresAt = now - 1000; // Expired immediately
+    device.planType = 'trial';
+    saveLicenseStore(store);
+    res.json({
+      success: true,
+      message: `تم إيقاف تفعيل الجهاز ${cleanDevice} وحظره بنجاح.`,
+    });
+    return;
+  }
+
+  res.status(400).json({ success: false, error: 'إجراء غير معروف.' });
 });
 
 // ==================== AI RECONCILIATION API (GEMINI OCR) ====================

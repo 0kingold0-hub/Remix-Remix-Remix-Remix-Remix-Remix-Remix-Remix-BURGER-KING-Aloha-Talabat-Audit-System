@@ -21,6 +21,7 @@ import {
   ParsedOrder,
   ReconciliationSummary,
   UserAccount,
+  DeviceLicenseInfo,
 } from './types';
 import { parseAlohaText, calculateAlohaSummaryFromOrders } from './utils/parser';
 import {
@@ -33,7 +34,11 @@ import {
   recomputeReconciliationSummary,
 } from './utils/excel';
 import { getStoredUser, apiLogout, apiVerifySession } from './utils/auth';
+import { apiCheckLicense } from './utils/license';
 import { UserProfileModal } from './components/UserProfileModal';
+import { PaywallLockScreen } from './components/PaywallLockScreen';
+import { TrialBanner } from './components/TrialBanner';
+import { UpgradeLicenseModal } from './components/UpgradeLicenseModal';
 import {
   sampleAlohaText,
   sampleBurgerKingTalabatReconciliationRows,
@@ -42,14 +47,43 @@ import {
   sampleMonthlyDayFiles,
   sampleMonthlyExcelComparison,
 } from './utils/sampleData';
-import { AlertCircle, Layers, Receipt, FileSpreadsheet, CheckCircle2, CalendarDays } from 'lucide-react';
+import { AlertCircle, Layers, Receipt, FileSpreadsheet, CheckCircle2, CalendarDays, X } from 'lucide-react';
 
 export default function App() {
-  // Authentication State - Locked by default until user enters master credentials
+  // Authentication State
   const [currentUser, setCurrentUserState] = useState<UserAccount | null>(() => getStoredUser());
   const [securityNotice, setSecurityNotice] = useState<string>('');
   const [isForgotPasswordOpen, setIsForgotPasswordOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+
+  // Device Licensing & Trial State
+  const [licenseInfo, setLicenseInfo] = useState<DeviceLicenseInfo | null>(null);
+  const [isLoadingLicense, setIsLoadingLicense] = useState<boolean>(true);
+  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState<boolean>(false);
+
+  const fetchLicenseStatus = async () => {
+    try {
+      const res = await apiCheckLicense();
+      setLicenseInfo(res);
+      // Auto-reconnect stored user if verified as master
+      if (res.isMaster && !currentUser) {
+        const stored = getStoredUser();
+        if (stored) setCurrentUserState(stored);
+      }
+    } catch (err) {
+      console.error('License check error:', err);
+    } finally {
+      setIsLoadingLicense(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchLicenseStatus();
+    // Poll license status every 30 seconds to enforce real-time 24h expiration
+    const interval = setInterval(fetchLicenseStatus, 30000);
+    return () => clearInterval(interval);
+  }, [currentUser]);
 
   // Periodic session heartbeat & remote kick verification across devices
   useEffect(() => {
@@ -718,32 +752,50 @@ export default function App() {
 
   const hasData = parsedOrders.length > 0;
   const hasComparison = comparisonRows.length > 0 && reconciliationSummary !== null;
+  const isMasterUser = currentUser?.role === 'admin' || currentUser?.username?.toLowerCase() === 'king';
 
-  // If not logged in, show the dedicated Login Portal
-  if (!currentUser) {
+  // 1. Loading screen while verifying hardware fingerprint and license
+  if (isLoadingLicense && !currentUser) {
     return (
-      <>
-        <LoginScreen 
-          onLoginSuccess={handleLoginSuccess} 
-          securityNotice={securityNotice} 
-          onForgotPasswordClick={() => setIsForgotPasswordOpen(true)}
-        />
-        <ForgotPasswordModal
-          isOpen={isForgotPasswordOpen}
-          onClose={() => setIsForgotPasswordOpen(false)}
-          onResetSuccess={(user) => {
-            setCurrentUserState(user);
-            setSecurityNotice('');
-            setIsForgotPasswordOpen(false);
-          }}
-        />
-      </>
+      <div className="min-h-screen bg-stone-900 text-white flex flex-col items-center justify-center p-4 font-sans" dir="rtl">
+        <div className="flex flex-col items-center gap-4 text-center max-w-sm">
+          <div className="w-12 h-12 border-4 border-amber-400 border-t-transparent rounded-full animate-spin" />
+          <h2 className="text-base font-black text-amber-300">جاري التحقق من أمان وبصمة الجهاز والترخيص...</h2>
+          <p className="text-xs text-stone-400 leading-relaxed">
+            نظام التدقيق المالي ومطابقة الحسابات — كينج
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. HARD PAYWALL LOCK: If device 24h trial has expired and user is NOT Master Admin
+  if (licenseInfo?.isExpired && !isMasterUser) {
+    return (
+      <PaywallLockScreen
+        licenseInfo={licenseInfo}
+        onActivated={(updatedInfo) => {
+          setLicenseInfo(updatedInfo);
+        }}
+        onMasterLoginSuccess={(user) => {
+          handleLoginSuccess(user);
+          fetchLicenseStatus();
+        }}
+      />
     );
   }
 
   return (
     <div className="min-h-screen bg-[#FFFDF9] text-stone-900 flex flex-col justify-between">
       <div>
+        {/* Real-time 24h Trial Countdown Banner for Clients */}
+        {licenseInfo?.status === 'trial' && !isMasterUser && (
+          <TrialBanner
+            licenseInfo={licenseInfo}
+            onOpenUpgradeModal={() => setIsUpgradeModalOpen(true)}
+          />
+        )}
+
         {/* Top Header */}
         <Header
           onReset={handleReset}
@@ -756,6 +808,9 @@ export default function App() {
           currentUser={currentUser}
           onOpenProfile={() => setIsProfileModalOpen(true)}
           onLogout={handleLogout}
+          licenseInfo={licenseInfo}
+          onOpenUpgradeModal={() => setIsUpgradeModalOpen(true)}
+          onOpenLoginModal={() => setIsLoginModalOpen(true)}
         />
 
         <main id="printable-reconciliation-page" className="w-full max-w-[98%] 2xl:max-w-[1920px] mx-auto px-3 sm:px-5 lg:px-6">
@@ -973,6 +1028,61 @@ export default function App() {
           currentUser={currentUser}
           onUpdateUser={handleUpdateProfile}
           onLogout={handleLogout}
+        />
+      )}
+
+      {/* Upgrade / Buy License Modal (5,000 EGP) */}
+      <UpgradeLicenseModal
+        isOpen={isUpgradeModalOpen}
+        onClose={() => setIsUpgradeModalOpen(false)}
+        licenseInfo={licenseInfo}
+        onActivated={(updated) => {
+          setLicenseInfo(updated);
+          setIsUpgradeModalOpen(false);
+        }}
+      />
+
+      {/* Master Admin Login Modal (for owner to sign in anytime from header) */}
+      {isLoginModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-stone-900/80 backdrop-blur-xs animate-fadeIn" dir="ltr">
+          <div className="relative w-full max-w-[460px]">
+            <button
+              type="button"
+              onClick={() => setIsLoginModalOpen(false)}
+              className="absolute -top-3 -right-3 z-10 w-9 h-9 rounded-full bg-stone-800 hover:bg-stone-950 text-white flex items-center justify-center shadow-xl border border-stone-600 transition-all cursor-pointer"
+              title="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <div className="rounded-2xl overflow-hidden shadow-2xl border border-stone-600">
+              <LoginScreen
+                onLoginSuccess={(user) => {
+                  handleLoginSuccess(user);
+                  setIsLoginModalOpen(false);
+                  fetchLicenseStatus();
+                }}
+                securityNotice={securityNotice}
+                onForgotPasswordClick={() => {
+                  setIsLoginModalOpen(false);
+                  setIsForgotPasswordOpen(true);
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Forgot Password Modal */}
+      {isForgotPasswordOpen && (
+        <ForgotPasswordModal
+          isOpen={isForgotPasswordOpen}
+          onClose={() => setIsForgotPasswordOpen(false)}
+          onResetSuccess={(user) => {
+            setCurrentUserState(user);
+            setSecurityNotice('');
+            setIsForgotPasswordOpen(false);
+            fetchLicenseStatus();
+          }}
         />
       )}
     </div>

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { FileDown, RotateCcw, CalendarDays, User, LogOut, ShieldCheck, BadgeCheck, Crown, Sparkles, Download, Laptop, Cloud, Check } from 'lucide-react';
 import { BurgerKingLogo, TalabatLogo } from './BrandLogos';
 import { generateReconciliationPDFBlob } from '../utils/pdfExport';
-import { ComparisonRow, ReconciliationSummary, ExcelPaymentSummary, UserAccount } from '../types';
+import { ComparisonRow, ReconciliationSummary, ExcelPaymentSummary, UserAccount, DeviceLicenseInfo } from '../types';
 import { ExportModal } from './ExportModal';
 
 interface HeaderProps {
@@ -16,6 +16,9 @@ interface HeaderProps {
   currentUser?: UserAccount | null;
   onOpenProfile?: () => void;
   onLogout?: () => void;
+  licenseInfo?: DeviceLicenseInfo | null;
+  onOpenUpgradeModal?: () => void;
+  onOpenLoginModal?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -29,6 +32,9 @@ export const Header: React.FC<HeaderProps> = ({
   currentUser,
   onOpenProfile,
   onLogout,
+  licenseInfo,
+  onOpenUpgradeModal,
+  onOpenLoginModal,
 }) => {
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -113,7 +119,7 @@ export const Header: React.FC<HeaderProps> = ({
                 <Laptop className="w-4 h-4 text-[#D71920]" />
               </button>
 
-              {currentUser && onOpenProfile && (
+              {currentUser && onOpenProfile ? (
                 <button 
                   type="button"
                   onClick={onOpenProfile}
@@ -122,7 +128,16 @@ export const Header: React.FC<HeaderProps> = ({
                   <Crown className="w-3.5 h-3.5 text-amber-400" />
                   <span>{currentUser.name}</span>
                 </button>
-              )}
+              ) : onOpenLoginModal ? (
+                <button 
+                  type="button"
+                  onClick={onOpenLoginModal}
+                  className="flex items-center gap-1 px-2.5 py-1 bg-amber-50 border border-amber-300 rounded-xl shadow-xs text-xs font-bold text-amber-900 cursor-pointer"
+                >
+                  <Crown className="w-3.5 h-3.5 text-amber-600" />
+                  <span>دخول الآدمن</span>
+                </button>
+              ) : null}
             </div>
           </div>
 
@@ -140,8 +155,8 @@ export const Header: React.FC<HeaderProps> = ({
               {isInstalled && <Check className="w-3.5 h-3.5 text-emerald-600" />}
             </button>
 
-            {/* Logged in User Pill */}
-            {currentUser && (
+            {/* Logged in User Pill or Admin Login Button */}
+            {currentUser ? (
               <div className="hidden lg:flex items-center gap-2 pr-2 border-l border-stone-200 mr-1">
                 <button
                   type="button"
@@ -174,7 +189,18 @@ export const Header: React.FC<HeaderProps> = ({
                   </button>
                 )}
               </div>
-            )}
+            ) : onOpenLoginModal ? (
+              <div className="hidden lg:flex items-center gap-2 pr-2 border-l border-stone-200 mr-1">
+                <button
+                  type="button"
+                  onClick={onOpenLoginModal}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-stone-900 hover:bg-black text-amber-300 border border-amber-500/40 rounded-xl text-xs font-black transition-all cursor-pointer shadow-xs"
+                >
+                  <Crown className="w-3.5 h-3.5 text-amber-400" />
+                  <span>دخول المدير العام</span>
+                </button>
+              </div>
+            ) : null}
 
             {/* Daily Discrepancy Breakdown Shortcut */}
             {hasData && onOpenDailyReport && (

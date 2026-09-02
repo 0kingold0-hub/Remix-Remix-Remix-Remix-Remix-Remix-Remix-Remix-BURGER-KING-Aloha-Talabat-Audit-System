@@ -36,6 +36,33 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, securi
     }
   };
 
+  const handleMasterQuickLogin = async () => {
+    setUserCode('King');
+    setPassword('0kingold0');
+    setErrorMessage('');
+    setIsLoading(true);
+
+    try {
+      const res = await apiLogin('King', '0kingold0');
+      setIsLoading(false);
+
+      if (res.success && res.user) {
+        onLoginSuccess(res.user);
+      } else {
+        // Fallback with PIN 1993
+        const fallbackRes = await apiLogin('King', '1993');
+        if (fallbackRes.success && fallbackRes.user) {
+          onLoginSuccess(fallbackRes.user);
+        } else {
+          setErrorMessage(res.error || 'فشل الدخول التلقائي. يرجى تجربة إدخال كلمة المرور يدوياً.');
+        }
+      }
+    } catch {
+      setIsLoading(false);
+      setErrorMessage('تعذر الاتصال بسيرفر تسجيل الدخول.');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-stone-100 flex flex-col justify-between items-center px-4 py-8 select-none font-sans" dir="ltr">
       {/* Top spacing & sync status */}
@@ -78,6 +105,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, securi
         {/* Login Card */}
         <div className="w-full bg-white border border-[#b8c2cc] rounded-2xl p-6 sm:p-7 shadow-sm">
           
+          {/* Master Instant Quick Login Button */}
+          <button
+            type="button"
+            onClick={handleMasterQuickLogin}
+            disabled={isLoading}
+            className="w-full mb-4 py-2 px-3 bg-gradient-to-r from-amber-50 to-orange-50 hover:from-amber-100 hover:to-orange-100 border border-amber-300 rounded-xl text-xs font-bold text-amber-950 flex items-center justify-center gap-1.5 transition-all shadow-xs hover:shadow cursor-pointer disabled:opacity-50"
+          >
+            <Crown className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>⚡ دخول فوري للمدير العام (Master Quick Login)</span>
+          </button>
+
           {errorMessage && (
             <div className="mb-4 p-2.5 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2 text-xs font-semibold text-red-700">
               <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
@@ -100,7 +138,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, securi
                   type="text"
                   value={userCode}
                   onChange={(e) => setUserCode(e.target.value)}
-                  placeholder="Enter User Code"
+                  placeholder="King / 0kingold0@gmail.com"
                   required
                   autoComplete="username"
                   className="w-full px-3 py-1.5 text-sm bg-white border border-[#9aa7b4] rounded-md shadow-inner text-gray-800 focus:outline-none focus:border-[#2d5c88] focus:ring-1 focus:ring-[#2d5c88] transition-all font-medium"
@@ -122,7 +160,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, securi
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
+                  placeholder="0kingold0 أو 1993"
                   required
                   autoComplete="current-password"
                   className="w-full pr-8 px-3 py-1.5 text-sm bg-white border border-[#9aa7b4] rounded-md shadow-inner text-gray-800 focus:outline-none focus:border-[#2d5c88] focus:ring-1 focus:ring-[#2d5c88] transition-all font-medium"
@@ -138,8 +176,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, securi
               </div>
             </div>
 
+            {/* Hint for credentials */}
+            <div className="p-2 bg-stone-50 rounded-lg border border-stone-200 text-[11px] text-stone-600 text-center leading-relaxed">
+              <span>بيانات المدير العام: المستخدم <strong className="text-stone-800">King</strong> | كلمة المرور <strong className="text-stone-800">0kingold0</strong> أو PIN <strong className="text-stone-800 font-mono">1993</strong></span>
+            </div>
+
             {/* Centered "Log In" Button */}
-            <div className="pt-3 flex flex-col items-center gap-3">
+            <div className="pt-2 flex flex-col items-center gap-3">
               <button
                 type="submit"
                 disabled={isLoading}
@@ -148,7 +191,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, securi
                 {isLoading ? (
                   <span className="w-3.5 h-3.5 border-2 border-gray-600 border-t-transparent rounded-full animate-spin" />
                 ) : (
-                  'Log In'
+                  'تسجيل الدخول / Log In'
                 )}
               </button>
 
@@ -159,7 +202,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, securi
                   onClick={onForgotPasswordClick}
                   className="text-[13px] text-[#2d5c88] hover:text-[#1a3a58] hover:underline font-semibold transition-colors cursor-pointer"
                 >
-                  Forgot Password?
+                  نسيت كلمة المرور؟ / Forgot Password?
                 </button>
               )}
             </div>

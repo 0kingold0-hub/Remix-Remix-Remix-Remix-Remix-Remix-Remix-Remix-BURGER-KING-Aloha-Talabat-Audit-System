@@ -104,7 +104,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
         setStoredLicenses(res.licenses || []);
       }
     } catch {
-      console.error('Failed to load licenses');
+      console.warn('Notice: Failed to load licenses list from server');
     } finally {
       setIsLoadingLicenses(false);
     }

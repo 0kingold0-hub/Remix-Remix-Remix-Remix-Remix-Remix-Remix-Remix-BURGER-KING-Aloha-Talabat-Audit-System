@@ -72,7 +72,7 @@ export default function App() {
         if (stored) setCurrentUserState(stored);
       }
     } catch (err) {
-      console.error('License check error:', err);
+      console.warn('License check notice:', err);
     } finally {
       setIsLoadingLicense(false);
     }

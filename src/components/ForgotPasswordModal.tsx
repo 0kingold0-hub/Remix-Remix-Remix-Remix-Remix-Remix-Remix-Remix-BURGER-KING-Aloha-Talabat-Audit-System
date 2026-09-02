@@ -129,6 +129,18 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
         {/* Form Card matching Login Screen */}
         <div className="w-full bg-white border border-[#b8c2cc] rounded-2xl p-6 sm:p-7 shadow-xl">
           
+          {/* Quick autofill button */}
+          <button
+            type="button"
+            onClick={() => {
+              setEmail('0kingold0@gmail.com');
+              setPinCode('1993');
+            }}
+            className="w-full mb-3.5 py-1.5 px-3 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg text-xs font-bold text-amber-900 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <span>⚡ تعبئة بيانات الماستر (King / PIN: 1993)</span>
+          </button>
+
           {errorMessage && (
             <div className="mb-4 p-2.5 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2 text-xs font-semibold text-red-700">
               <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
@@ -144,21 +156,21 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
           )}
 
           <form onSubmit={handleResetSubmit} className="space-y-3.5">
-            {/* Row 1: Email */}
+            {/* Row 1: Email / Username */}
             <div className="flex items-center justify-between gap-3">
               <label 
                 htmlFor="resetEmailInput"
                 className="text-xs font-medium text-[#2d5c88] w-28 shrink-0 text-left cursor-pointer"
               >
-                Admin Email
+                Admin / Email
               </label>
               <div className="flex-1">
                 <input
                   id="resetEmailInput"
-                  type="email"
+                  type="text"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="0kingold0@gmail.com"
+                  placeholder="King أو 0kingold0@gmail.com"
                   required
                   autoFocus
                   className="w-full px-3 py-1.5 text-sm bg-white border border-[#9aa7b4] rounded-md shadow-inner text-gray-800 focus:outline-none focus:border-[#2d5c88] focus:ring-1 focus:ring-[#2d5c88] transition-all font-medium font-mono"
@@ -180,7 +192,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                   type={showPin ? 'text' : 'password'}
                   value={pinCode}
                   onChange={(e) => setPinCode(e.target.value)}
-                  placeholder="Security PIN Code"
+                  placeholder="PIN: 1993"
                   required
                   className="w-full pr-8 px-3 py-1.5 text-sm bg-white border border-[#9aa7b4] rounded-md shadow-inner text-gray-800 focus:outline-none focus:border-[#2d5c88] focus:ring-1 focus:ring-[#2d5c88] transition-all font-medium font-mono"
                 />

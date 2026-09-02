@@ -1,5 +1,5 @@
 import { DeviceLicenseInfo, GeneratedLicenseRecord, StoredDeviceEntry } from '../types';
-import { getStoredToken } from './auth';
+import { getStoredToken, setStoredToken, setStoredUser } from './auth';
 
 const DEVICE_ID_KEY = 'bk_hardware_device_id_v3';
 const MASTER_CONTACT_PHONE = '01100051593';
@@ -145,7 +145,7 @@ export function getOrCreateDeviceId(): string {
   return generatedId;
 }
 
-// 1. Check License Status
+// 1. Check License Status with resilient retry
 export async function apiCheckLicense(deviceId?: string): Promise<DeviceLicenseInfo> {
   const finalId = deviceId || getOrCreateDeviceId();
   const token = getStoredToken();
@@ -156,22 +156,35 @@ export async function apiCheckLicense(deviceId?: string): Promise<DeviceLicenseI
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  try {
-    const res = await fetch(`/api/license/status?deviceId=${encodeURIComponent(finalId)}`, {
-      headers,
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      // Store known trial target in localStorage as client anchor
-      if (data.trialExpiresAt) {
-        try {
-          localStorage.setItem(`bk_trial_exp_${finalId}`, String(data.trialExpiresAt));
-        } catch {}
+  // Attempt up to 3 times to connect to the backend (handles cold starts / page refreshes seamlessly)
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+      const res = await fetch(`/api/license/status?deviceId=${encodeURIComponent(finalId)}`, {
+        headers,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.success) {
+          if (data.trialExpiresAt) {
+            try {
+              localStorage.setItem(`bk_trial_exp_${finalId}`, String(data.trialExpiresAt));
+            } catch {}
+          }
+          return data;
+        }
       }
-      return data;
+    } catch {
+      // Small pause before retrying on network failure
+      if (attempt < 2) {
+        await new Promise(r => setTimeout(r, 600));
+      }
     }
-  } catch (err) {
-    console.error('License check network error', err);
   }
 
   // Fallback offline trial response: retrieve persistent anchor to prevent reset
@@ -207,7 +220,7 @@ export async function apiActivateLicense(
   licenseKey: string,
   clientName?: string,
   deviceId?: string
-): Promise<{ success: boolean; message: string; planType?: string; expiresAt?: number }> {
+): Promise<{ success: boolean; message: string; planType?: string; expiresAt?: number; isMaster?: boolean; token?: string; user?: any }> {
   const finalId = deviceId || getOrCreateDeviceId();
 
   try {
@@ -228,11 +241,20 @@ export async function apiActivateLicense(
     }
 
     if (res.ok && data.success) {
+      if (data.token) {
+        setStoredToken(data.token);
+      }
+      if (data.user) {
+        setStoredUser(data.user);
+      }
       return {
         success: true,
         message: data.message || 'تم تفعيل النسخة الكاملة بنجاح!',
         planType: data.planType,
         expiresAt: data.licenseExpiresAt,
+        isMaster: data.isMaster,
+        token: data.token,
+        user: data.user,
       };
     }
     return {
@@ -265,6 +287,12 @@ export async function apiMasterPinBypass(
     });
     const data = await res.json();
     if (res.ok && data.success) {
+      if (data.token) {
+        setStoredToken(data.token);
+      }
+      if (data.user) {
+        setStoredUser(data.user);
+      }
       return data;
     }
     return {

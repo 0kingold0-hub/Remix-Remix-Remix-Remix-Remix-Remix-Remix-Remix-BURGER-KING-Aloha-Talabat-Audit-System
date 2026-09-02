@@ -6,25 +6,40 @@
       "deviceId": "BK-DEV-3072-B371-3DA9",
       "firstSeenAt": 1788389196935,
       "trialDurationMs": 86400000,
-      "trialExpiresAt": 1788475596935,
-      "isActivated": false,
-      "planType": "trial",
-      "lastSeenAt": 1788389940161,
+      "trialExpiresAt": 1788390224109,
+      "isActivated": true,
+      "planType": "annual",
+      "lastSeenAt": 1788391278622,
       "ip": "197.60.174.116",
-      "deviceName": "ويندوز (Windows PC) — Google Chrome"
+      "deviceName": "ويندوز (Windows PC) — Google Chrome",
+      "activatedAt": 1788391403319,
+      "licenseExpiresAt": 1819927403319,
+      "licenseKey": "BK-ADMIN-INSTANT-3DA9",
+      "clientName": "جهاز المدير العام (M-King Master)"
     },
     "BK-DEV-3072-B371-B45F": {
       "deviceId": "BK-DEV-3072-B371-B45F",
       "firstSeenAt": 1788389952870,
       "trialDurationMs": 86400000,
-      "trialExpiresAt": 1788389952870,
+      "trialExpiresAt": 1788390225223,
       "isActivated": true,
-      "activatedAt": 1788389952870,
-      "licenseKey": "BK-LIC-DC6B-5247-UNIV-397F",
-      "licenseExpiresAt": 1819925947459,
+      "activatedAt": 1788390218484,
+      "licenseKey": "BK-ADMIN-INSTANT-B45F",
+      "licenseExpiresAt": 1819926218484,
       "planType": "annual",
       "clientName": "برجر كنج فرع 1",
       "lastSeenAt": 1788389955799,
+      "ip": "127.0.0.1",
+      "deviceName": "جهاز كمبيوتر — متصفح ويب"
+    },
+    "BK-DEV-TEST": {
+      "deviceId": "BK-DEV-TEST",
+      "firstSeenAt": 1788391092624,
+      "trialDurationMs": 86400000,
+      "trialExpiresAt": 1788477492624,
+      "isActivated": false,
+      "planType": "trial",
+      "lastSeenAt": 1788391092624,
       "ip": "127.0.0.1",
       "deviceName": "جهاز كمبيوتر — متصفح ويب"
     }
@@ -78,6 +93,30 @@
       "notes": "",
       "isActive": true,
       "usedAt": 1788389952870
+    },
+    "BK-LIC-B77D-5247-B45F-E5A3": {
+      "key": "BK-LIC-B77D-5247-B45F-E5A3",
+      "deviceId": "BK-DEV-3072-B371-B45F",
+      "clientName": "برجر كنج فرع 1",
+      "planType": "annual",
+      "priceEgp": 5000,
+      "createdAt": 1788390163222,
+      "expiresAt": 1819926163221,
+      "generatedBy": "M-King (Master Admin)",
+      "notes": "",
+      "isActive": true
+    },
+    "BK-LIC-851B-5247-3DA9-6CE4": {
+      "key": "BK-LIC-851B-5247-3DA9-6CE4",
+      "deviceId": "BK-DEV-3072-B371-3DA9",
+      "clientName": "جهاز المدير العام (M-King Master)",
+      "planType": "annual",
+      "priceEgp": 5000,
+      "createdAt": 1788391379627,
+      "expiresAt": 1819927379627,
+      "generatedBy": "M-King (Master Admin)",
+      "notes": "",
+      "isActive": true
     }
   }
 }

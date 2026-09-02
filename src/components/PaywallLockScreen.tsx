@@ -71,13 +71,17 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
 
       if (res.success) {
         setSuccessMsg(res.message);
+        if (res.user && onMasterLoginSuccess) {
+          onMasterLoginSuccess(res.user);
+        }
         setTimeout(() => {
           onActivated({
             ...licenseInfo,
             status: 'active',
             isExpired: false,
             licenseKey: licenseKeyInput.trim(),
-            planType: (res.planType as any) || 'annual',
+            planType: (res.planType as any) || 'lifetime',
+            isMaster: res.isMaster ?? false,
           });
         }, 1200);
       } else {
@@ -314,9 +318,17 @@ export const PaywallLockScreen: React.FC<PaywallLockScreenProps> = ({
               </button>
             </div>
 
-            <p className="text-[11px] text-stone-500">
-              بمجرد تحويل المبلغ وإرسال كود جهازك عبر واتساب، ستصلك شفرة التفعيل وتعمل المنظومة مباشرة دون فقدان أي بيانات سابقة.
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-stone-800 text-[11px] text-stone-400">
+              <span>💡 للإدارة العامة: يمكنك إدخال الرقم السري <strong className="text-amber-400 font-mono">1993</strong> أو المفتاح الماستر للفتح الفوري.</span>
+              <button
+                type="button"
+                onClick={() => setIsMasterModalOpen(true)}
+                className="text-amber-400 hover:text-amber-300 hover:underline font-bold flex items-center gap-1 cursor-pointer"
+              >
+                <Crown className="w-3.5 h-3.5" />
+                <span>دخول المدير العام (Master PIN)</span>
+              </button>
+            </div>
           </form>
         </div>
       </div>

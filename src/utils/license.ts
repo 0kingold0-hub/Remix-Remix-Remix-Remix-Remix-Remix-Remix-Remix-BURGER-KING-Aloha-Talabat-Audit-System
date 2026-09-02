@@ -101,7 +101,13 @@ export async function apiActivateLicense(
         clientName,
       }),
     });
-    const data = await res.json();
+    let data: any = {};
+    try {
+      data = await res.json();
+    } catch {
+      data = {};
+    }
+
     if (res.ok && data.success) {
       return {
         success: true,
@@ -112,12 +118,12 @@ export async function apiActivateLicense(
     }
     return {
       success: false,
-      message: data.error || 'كود الترخيص غير صحيح أو منتهي.',
+      message: data.error || data.message || 'كود الترخيص غير صحيح أو غير مطابق لهذا الجهاز.',
     };
-  } catch {
+  } catch (err: any) {
     return {
       success: false,
-      message: 'تعذر الاتصال بالسيرفر السحابي للتحقق من الترخيص.',
+      message: err?.message ? `تعذر الاتصال بالسيرفر السحابي (${err.message})` : 'تعذر الاتصال بالسيرفر السحابي للتحقق من الترخيص.',
     };
   }
 }

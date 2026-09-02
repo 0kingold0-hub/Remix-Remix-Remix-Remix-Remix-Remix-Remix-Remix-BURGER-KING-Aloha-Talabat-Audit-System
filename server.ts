@@ -807,14 +807,18 @@ function generateLicenseKey(
   durationDays: number
 ): { key: string; expiresAt: number } {
   const store = getLicenseStore();
-  const cleanId = (deviceId || '').trim().toUpperCase();
+  const rawId = (deviceId || '').trim().toUpperCase();
+  const isUniversal = !rawId || rawId === 'UNIVERSAL' || rawId === 'ANY' || rawId === 'ALL';
+  const cleanId = isUniversal ? 'UNIVERSAL' : rawId;
   const now = Date.now();
   const expiresAt = durationDays > 0 ? now + durationDays * 24 * 60 * 60 * 1000 : 0; // 0 = Lifetime
   
   const expChunk = expiresAt > 0 
     ? Math.floor(expiresAt / 86400000).toString(16).toUpperCase().padStart(4, '0') 
     : 'LIFE';
-  const devChunk = cleanId.replace(/[^A-Z0-9]/g, '').slice(-4).padStart(4, 'X');
+  const devChunk = isUniversal 
+    ? 'UNIV' 
+    : cleanId.replace(/[^A-Z0-9]/g, '').slice(-4).padStart(4, 'X');
   const salt = crypto.randomBytes(2).toString('hex').toUpperCase();
 
   const hmac = crypto.createHmac('sha256', store.masterSecret);
@@ -849,8 +853,12 @@ function verifyLicenseKey(
     if (!rec.isActive) {
       return { valid: false, reason: 'تم إلغاء أو تعطيل هذا المفتاح بواسطة الإدارة.' };
     }
-    if (rec.deviceId && rec.deviceId.toUpperCase() !== cleanDevice && rec.deviceId !== 'UNIVERSAL') {
-      return { valid: false, reason: 'هذا المفتاح مخصص لجهاز كمبيوتر آخر ولا يمكن استخدامه على هذا الجهاز.' };
+    const isUniversalKey = !rec.deviceId || rec.deviceId.toUpperCase() === 'UNIVERSAL' || rec.deviceId === 'ANY';
+    if (!isUniversalKey && rec.deviceId && rec.deviceId.toUpperCase() !== cleanDevice) {
+      return { 
+        valid: false, 
+        reason: `هذا المفتاح مخصص لجهاز (${rec.deviceId.slice(-9)}) بينما كود جهازك الحالي هو (${cleanDevice.slice(-9)}). يرجى التأكد من كود الجهاز.` 
+      };
     }
     if (rec.expiresAt > 0 && Date.now() > rec.expiresAt) {
       return { valid: false, reason: 'انتهت فترة صلاحية هذا الترخيص.' };
@@ -863,8 +871,13 @@ function verifyLicenseKey(
   if (parts.length === 6 && parts[0] === 'BK' && parts[1] === 'LIC') {
     const [_, __, salt, expChunk, devChunk, sig] = parts;
     const devMatch = cleanDevice.replace(/[^A-Z0-9]/g, '').slice(-4).padStart(4, 'X');
-    if (devChunk !== devMatch && devChunk !== 'XXXX') {
-      return { valid: false, reason: 'كود الترخيص غير مطابق لمعرّف هذا الجهاز.' };
+    const isUnivChunk = devChunk === 'UNIV' || devChunk === 'XXXX';
+
+    if (!isUnivChunk && devChunk !== devMatch) {
+      return { 
+        valid: false, 
+        reason: `كود الترخيص ينتهي برمز (${devChunk}) بينما جهازك الحالي ينتهي بـ (${devMatch}). الكود غير مطابق لهذا الجهاز.` 
+      };
     }
 
     const plans: Array<'annual' | 'lifetime' | 'monthly' | 'semi_annual' | 'custom'> = [
@@ -872,7 +885,8 @@ function verifyLicenseKey(
     ];
     for (const plan of plans) {
       const hmac = crypto.createHmac('sha256', store.masterSecret);
-      hmac.update(`${cleanDevice}:${plan}:${expChunk}:${salt}`);
+      const hmacTarget = isUnivChunk ? 'UNIVERSAL' : cleanDevice;
+      hmac.update(`${hmacTarget}:${plan}:${expChunk}:${salt}`);
       const expectedSig = hmac.digest('hex').slice(0, 4).toUpperCase();
       if (expectedSig === sig) {
         let expiresAt = 0;
@@ -890,7 +904,7 @@ function verifyLicenseKey(
     }
   }
 
-  return { valid: false, reason: 'مفتاح الترخيص غير صالح. يرجى التأكد من نسخه بشكل دقيق.' };
+  return { valid: false, reason: 'مفتاح الترخيص غير صالح. يرجى التأكد من نسخه بشكل دقيق دون مسافات زائدة.' };
 }
 
 // Check whether caller has Master Admin rights

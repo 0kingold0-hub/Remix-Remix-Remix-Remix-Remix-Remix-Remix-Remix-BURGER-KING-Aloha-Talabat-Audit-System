@@ -1,0 +1,83 @@
+{
+  "masterSecret": "bk_king_master_secret_425jkt7x0n",
+  "defaultPriceEgp": 5000,
+  "devices": {
+    "BK-DEV-3072-B371-3DA9": {
+      "deviceId": "BK-DEV-3072-B371-3DA9",
+      "firstSeenAt": 1788389196935,
+      "trialDurationMs": 86400000,
+      "trialExpiresAt": 1788475596935,
+      "isActivated": false,
+      "planType": "trial",
+      "lastSeenAt": 1788389940161,
+      "ip": "197.60.174.116",
+      "deviceName": "ويندوز (Windows PC) — Google Chrome"
+    },
+    "BK-DEV-3072-B371-B45F": {
+      "deviceId": "BK-DEV-3072-B371-B45F",
+      "firstSeenAt": 1788389952870,
+      "trialDurationMs": 86400000,
+      "trialExpiresAt": 1788389952870,
+      "isActivated": true,
+      "activatedAt": 1788389952870,
+      "licenseKey": "BK-LIC-DC6B-5247-UNIV-397F",
+      "licenseExpiresAt": 1819925947459,
+      "planType": "annual",
+      "clientName": "برجر كنج فرع 1",
+      "lastSeenAt": 1788389955799,
+      "ip": "127.0.0.1",
+      "deviceName": "جهاز كمبيوتر — متصفح ويب"
+    }
+  },
+  "licenses": {
+    "BK-LIC-1F2C-50F8-3DA9-D589": {
+      "key": "BK-LIC-1F2C-50F8-3DA9-D589",
+      "deviceId": "BK-DEV-3072-B371-3DA9",
+      "clientName": "عميل تجاري",
+      "planType": "monthly",
+      "priceEgp": 1000,
+      "createdAt": 1788389749058,
+      "expiresAt": 1790981749057,
+      "generatedBy": "M-King (Master Admin)",
+      "notes": "",
+      "isActive": true
+    },
+    "BK-LIC-3706-50F8-3DA9-60B8": {
+      "key": "BK-LIC-3706-50F8-3DA9-60B8",
+      "deviceId": "BK-DEV-3072-B371-3DA9",
+      "clientName": "عميل تجاري",
+      "planType": "monthly",
+      "priceEgp": 1000,
+      "createdAt": 1788389772187,
+      "expiresAt": 1790981772187,
+      "generatedBy": "M-King (Master Admin)",
+      "notes": "",
+      "isActive": true
+    },
+    "BK-LIC-EC14-50F8-3DA9-91B4": {
+      "key": "BK-LIC-EC14-50F8-3DA9-91B4",
+      "deviceId": "BK-DEV-3072-B371-3DA9",
+      "clientName": "عميل تجاري",
+      "planType": "monthly",
+      "priceEgp": 1000,
+      "createdAt": 1788389773269,
+      "expiresAt": 1790981773269,
+      "generatedBy": "M-King (Master Admin)",
+      "notes": "",
+      "isActive": true
+    },
+    "BK-LIC-DC6B-5247-UNIV-397F": {
+      "key": "BK-LIC-DC6B-5247-UNIV-397F",
+      "deviceId": "BK-DEV-3072-B371-B45F",
+      "clientName": "عميل تجربة عام",
+      "planType": "annual",
+      "priceEgp": 5000,
+      "createdAt": 1788389947460,
+      "expiresAt": 1819925947459,
+      "generatedBy": "M-King (Master Admin)",
+      "notes": "",
+      "isActive": true,
+      "usedAt": 1788389952870
+    }
+  }
+}

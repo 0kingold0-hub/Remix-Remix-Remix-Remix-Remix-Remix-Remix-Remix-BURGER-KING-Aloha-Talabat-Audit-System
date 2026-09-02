@@ -716,15 +716,29 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {/* Device Selection / Input */}
                     <div>
-                      <label className="block text-[11px] font-bold text-stone-300 mb-1">
-                        كود جهاز العميل (Device ID):
-                      </label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-[11px] font-bold text-stone-300">
+                          كود جهاز العميل (Device ID):
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setGenDeviceId('UNIVERSAL')}
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded cursor-pointer transition-all ${
+                            genDeviceId === 'UNIVERSAL'
+                              ? 'bg-amber-400 text-stone-950 shadow-xs'
+                              : 'bg-amber-950/80 hover:bg-amber-900 text-amber-300 border border-amber-800'
+                          }`}
+                        >
+                          🌐 ترخيص عام (يعمل على أي جهاز)
+                        </button>
+                      </div>
+
                       <div className="relative">
                         <input
                           type="text"
                           value={genDeviceId}
                           onChange={e => setGenDeviceId(e.target.value.toUpperCase())}
-                          placeholder="BK-DEV-XXXX-XXXX-XXXX"
+                          placeholder="BK-DEV-XXXX-XXXX-XXXX أو UNIVERSAL"
                           className="w-full px-3 py-2 bg-stone-950 border border-stone-700 rounded-xl text-xs font-mono text-amber-400 placeholder:text-stone-600 focus:border-amber-500 focus:outline-none"
                           dir="ltr"
                           required
@@ -732,10 +746,10 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                       </div>
 
                       {/* Quick picker from detected devices */}
-                      {trackedDevices.length > 0 && (
-                        <div className="mt-1 flex items-center gap-1.5 flex-wrap">
-                          <span className="text-[10px] text-stone-400">اختر من الأجهزة الحديثة:</span>
-                          {trackedDevices.slice(0, 3).map(d => (
+                      <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[10px] text-stone-400">أجهزة العملاء المتصلة:</span>
+                        {trackedDevices.length > 0 ? (
+                          trackedDevices.map(d => (
                             <button
                               type="button"
                               key={d.deviceId}
@@ -743,13 +757,20 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                                 setGenDeviceId(d.deviceId);
                                 if (d.clientName) setGenClientName(d.clientName);
                               }}
-                              className="text-[10px] font-mono bg-stone-800 hover:bg-stone-700 text-stone-300 px-1.5 py-0.5 rounded cursor-pointer border border-stone-700"
+                              className={`text-[10px] font-mono px-1.5 py-0.5 rounded cursor-pointer border transition-all ${
+                                genDeviceId === d.deviceId
+                                  ? 'bg-amber-500 text-stone-950 border-amber-400 font-bold'
+                                  : 'bg-stone-800 hover:bg-stone-700 text-stone-300 border-stone-700'
+                              }`}
+                              title={d.deviceName || d.deviceId}
                             >
                               {d.deviceId.slice(-9)} {d.status === 'expired' ? '⚠️' : ''}
                             </button>
-                          ))}
-                        </div>
-                      )}
+                          ))
+                        ) : (
+                          <span className="text-[10px] text-stone-500">لا توجد أجهزة مسجلة حالياً</span>
+                        )}
+                      </div>
                     </div>
 
                     {/* Client Name */}

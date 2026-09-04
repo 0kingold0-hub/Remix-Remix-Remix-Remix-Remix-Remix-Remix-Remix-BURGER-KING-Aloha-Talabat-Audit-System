@@ -305,7 +305,11 @@ app.post('/api/auth/login', (req, res) => {
           firstSeenAt: now,
           trialDurationMs: TRIAL_DURATION_MS,
           trialExpiresAt: now + 365 * 24 * 3600000,
+          status: 'active',
           isActivated: true,
+          activationStartedAt: now,
+          activationExpiresAt: now + 365 * 24 * 3600000,
+          activationCount: 1,
           activatedAt: now,
           licenseKey: 'BK-LIC-KING-1993-MASTER-LIFETIME',
           licenseExpiresAt: 0,
@@ -314,6 +318,7 @@ app.post('/api/auth/login', (req, res) => {
           lastSeenAt: now,
           ip: clientIp,
           deviceName,
+          history: [{ id: 'hist-' + now, timestamp: now, action: 'activated', details: 'تفعيل دائم لمدير النظام', performedBy: 'Master Admin' }],
         };
       } else {
         store.devices[cleanDev].isActivated = true;
@@ -820,27 +825,67 @@ app.post('/api/auth/logout', (req, res) => {
 // ==================== LICENSE & TRIAL MANAGEMENT SYSTEM ====================
 
 const LICENSE_STORE_FILE = path.join(DATA_DIR, 'license-store.json');
-const TRIAL_DURATION_MS = 24 * 60 * 60 * 1000; // 24 Hours Free Trial
+const NOTIFICATIONS_FILE = path.join(DATA_DIR, 'notifications.json');
+const INITIAL_REGISTRATION_DURATION_MS = 5 * 60 * 1000; // 5 minutes initial period on very first discovery
+const TRIAL_DURATION_MS = INITIAL_REGISTRATION_DURATION_MS;
 const DEFAULT_LICENSE_PRICE_EGP = 5000; // 5,000 EGP License
 const MASTER_CONTACT_PHONE = '01100051593';
+
+interface DeviceLocationRecord {
+  latitude?: number;
+  longitude?: number;
+  address?: string;
+  updatedAt?: number;
+  permissionStatus: 'granted' | 'denied' | 'unavailable' | 'prompt';
+}
+
+interface ActivationRequestRecord {
+  id: string;
+  deviceId: string;
+  deviceName?: string;
+  clientName?: string;
+  phone?: string;
+  notes?: string;
+  requestedAt: number;
+  requestedDurationMinutes?: number;
+  location?: DeviceLocationRecord;
+  ip?: string;
+  status: 'pending' | 'approved' | 'rejected';
+}
+
+interface DeviceHistoryRecord {
+  id: string;
+  timestamp: number;
+  action: 'registered' | 'request_activation' | 'activated' | 'time_added' | 'locked' | 'reset';
+  details?: string;
+  performedBy?: string;
+}
 
 interface DeviceRecord {
   deviceId: string;
   firstSeenAt: number;
-  trialDurationMs: number;
-  trialExpiresAt: number;
+  lastSeenAt: number;
+  status: 'locked' | 'active' | 'pending';
   isActivated: boolean;
+  activationStartedAt?: number;
+  activationExpiresAt?: number;
+  activationCount: number;
+  trialDurationMs?: number;
+  trialExpiresAt?: number;
   activatedAt?: number;
   licenseKey?: string;
   licenseExpiresAt?: number;
-  planType: 'trial' | 'annual' | 'lifetime' | 'monthly' | 'semi_annual' | 'custom';
+  planType: 'trial' | 'annual' | 'lifetime' | 'monthly' | 'semi_annual' | 'custom' | string;
   clientName?: string;
   branchName?: string;
   phone?: string;
   notes?: string;
-  lastSeenAt: number;
   ip: string;
   deviceName: string;
+  location?: DeviceLocationRecord;
+  pendingRequest?: ActivationRequestRecord | null;
+  lastRequestAt?: number;
+  history?: DeviceHistoryRecord[];
 }
 
 interface StoredLicenseRecord {
@@ -864,6 +909,111 @@ interface LicenseStoreData {
   licenses: Record<string, StoredLicenseRecord>;
 }
 
+export interface AdminNotificationRecord {
+  id: string;
+  type: 'activation_request' | 'device_locked' | 'device_activated' | 'device_reset';
+  deviceId: string;
+  deviceName?: string;
+  clientName?: string;
+  title: string;
+  message: string;
+  createdAt: number;
+  read: boolean;
+  location?: DeviceLocationRecord;
+  metadata?: Record<string, any>;
+}
+
+// Persistent Notifications Store
+function getNotifications(): AdminNotificationRecord[] {
+  try {
+    if (!fs.existsSync(NOTIFICATIONS_FILE)) {
+      fs.writeFileSync(NOTIFICATIONS_FILE, JSON.stringify([], null, 2), 'utf-8');
+      return [];
+    }
+    const raw = fs.readFileSync(NOTIFICATIONS_FILE, 'utf-8');
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error('Error reading notifications', err);
+    return [];
+  }
+}
+
+function saveNotifications(notifs: AdminNotificationRecord[]): void {
+  try {
+    fs.writeFileSync(NOTIFICATIONS_FILE, JSON.stringify(notifs, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Error saving notifications', err);
+  }
+}
+
+function addAdminNotification(notif: Omit<AdminNotificationRecord, 'id' | 'createdAt' | 'read'>): AdminNotificationRecord {
+  const notifs = getNotifications();
+  const newNotif: AdminNotificationRecord = {
+    ...notif,
+    id: 'notif-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7),
+    createdAt: Date.now(),
+    read: false,
+  };
+  notifs.unshift(newNotif);
+  // Cap at 300 entries to prevent infinite growth
+  if (notifs.length > 300) notifs.length = 300;
+  saveNotifications(notifs);
+
+  // Broadcast to all active SSE listeners
+  broadcastDeviceEvent('new_notification', newNotif);
+  return newNotif;
+}
+
+// Real-Time Server-Sent Events (SSE) Client Hub
+const sseClients: { id: string; deviceId?: string; isAdmin?: boolean; res: express.Response }[] = [];
+
+function broadcastDeviceEvent(event: string, data: any) {
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (let i = sseClients.length - 1; i >= 0; i--) {
+    const client = sseClients[i];
+    try {
+      client.res.write(payload);
+    } catch {
+      sseClients.splice(i, 1);
+    }
+  }
+}
+
+// Periodic keep-alive heartbeat for SSE
+setInterval(() => {
+  const pingPayload = `: heartbeat ${Date.now()}\n\n`;
+  for (let i = sseClients.length - 1; i >= 0; i--) {
+    try {
+      sseClients[i].res.write(pingPayload);
+    } catch {
+      sseClients.splice(i, 1);
+    }
+  }
+}, 20000);
+
+// Real Reverse Geocoding Helper using OpenStreetMap Nominatim
+async function reverseGeocodeCoordinates(lat: number, lon: number): Promise<string> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3500);
+    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`, {
+      headers: {
+        'User-Agent': 'BK-Aloha-Talabat-Audit/2.0 (contact: 0kingold0@gmail.com)',
+        'Accept-Language': 'ar,en',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (res.ok) {
+      const data: any = await res.json();
+      if (data && data.display_name) {
+        return data.display_name;
+      }
+    }
+  } catch {}
+  return `إحداثيات: ${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+}
+
 function getLicenseStore(): LicenseStoreData {
   try {
     if (!fs.existsSync(LICENSE_STORE_FILE)) {
@@ -877,7 +1027,24 @@ function getLicenseStore(): LicenseStoreData {
       return initialStore;
     }
     const raw = fs.readFileSync(LICENSE_STORE_FILE, 'utf-8');
-    return JSON.parse(raw);
+    const parsed: LicenseStoreData = JSON.parse(raw);
+
+    // Normalize existing devices for backwards compatibility
+    if (parsed.devices) {
+      Object.values(parsed.devices).forEach(d => {
+        if (!d.status) {
+          d.status = d.isActivated ? 'active' : 'locked';
+        }
+        if (d.activationCount === undefined) {
+          d.activationCount = d.isActivated ? 1 : 0;
+        }
+        if (!d.history) {
+          d.history = [];
+        }
+      });
+    }
+
+    return parsed;
   } catch (err) {
     console.error('Error reading license store', err);
     return {
@@ -1044,8 +1211,31 @@ function isCallerMasterAdmin(req: express.Request): boolean {
   return false;
 }
 
-// 1. Device License & 24-Hour Trial Status Check
-app.get('/api/license/status', (req, res) => {
+// 0. Real-Time Server-Sent Events (SSE) Stream for Instant Admin & Client Synchronization
+app.get('/api/license/events', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  if (res.flushHeaders) res.flushHeaders();
+
+  const clientId = 'sse-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7);
+  const deviceId = ((req.query.deviceId as string) || '').trim().toUpperCase();
+  const isAdmin = req.query.isAdmin === 'true';
+
+  sseClients.push({ id: clientId, deviceId, isAdmin, res });
+
+  // Initial connection handshake
+  res.write(`event: connected\ndata: ${JSON.stringify({ time: Date.now(), clientId })}\n\n`);
+
+  req.on('close', () => {
+    const idx = sseClients.findIndex(c => c.id === clientId);
+    if (idx !== -1) sseClients.splice(idx, 1);
+  });
+});
+
+// 1. Device License Status Check (Strict Server-Side Validation)
+app.get('/api/license/status', async (req, res) => {
   try {
     const deviceId = ((req.query.deviceId as string) || '').trim().toUpperCase();
     const clientIp = ((req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()) || req.socket.remoteAddress || '127.0.0.1';
@@ -1054,21 +1244,27 @@ app.get('/api/license/status', (req, res) => {
 
     const isMaster = isCallerMasterAdmin(req);
 
-    // If Master Admin, always full access and never expired!
+    // If Master Admin, always active and never locked
     if (isMaster) {
       res.json({
         success: true,
         deviceId: deviceId || 'BK-DEV-MASTER-ADMIN',
+        deviceName: 'جهاز المدير العام (Master PC)',
         status: 'active',
+        isActivated: true,
         isExpired: false,
         isMaster: true,
         trialStartedAt: Date.now() - 3600000,
         trialExpiresAt: Date.now() + 365 * 24 * 3600000,
+        activationStartedAt: Date.now() - 3600000,
+        activationExpiresAt: Date.now() + 365 * 24 * 3600000,
         remainingMs: 365 * 24 * 3600000,
         priceEgp: DEFAULT_LICENSE_PRICE_EGP,
         planType: 'lifetime',
         contactPhone: MASTER_CONTACT_PHONE,
         clientName: 'المدير العام (Master Admin)',
+        activationCount: 1,
+        serverTime: Date.now(),
       });
       return;
     }
@@ -1082,56 +1278,96 @@ app.get('/api/license/status', (req, res) => {
     let device = store.devices[deviceId];
     const now = Date.now();
 
-    // First time this device connects: start 24-hour trial!
-    if (!device) {
-      // Check if another device record matches this IP & deviceName from recent activity (prevents timer reset on iframe reload)
-      const existingMatch = Object.values(store.devices).find(
-        d => d.ip === clientIp && d.ip !== '127.0.0.1' && (now - d.firstSeenAt < 72 * 3600000)
-      );
+    // If client passes location updates in query params
+    const rawLat = parseFloat(req.query.latitude as string);
+    const rawLng = parseFloat(req.query.longitude as string);
+    const permStatus = (req.query.permissionStatus as any) || (rawLat && rawLng ? 'granted' : undefined);
 
-      if (existingMatch) {
-        device = {
-          ...existingMatch,
-          deviceId,
-          lastSeenAt: now,
+    // First time this device connects:
+    if (!device) {
+      const initialExpires = now + INITIAL_REGISTRATION_DURATION_MS;
+      device = {
+        deviceId,
+        firstSeenAt: now,
+        lastSeenAt: now,
+        status: 'active', // Initial 5 minutes valid duration
+        isActivated: true,
+        activationStartedAt: now,
+        activationExpiresAt: initialExpires,
+        activationCount: 1,
+        trialDurationMs: INITIAL_REGISTRATION_DURATION_MS,
+        trialExpiresAt: initialExpires,
+        planType: 'trial',
+        clientName: 'عميل جديد',
+        ip: clientIp,
+        deviceName,
+        history: [
+          {
+            id: 'hist-' + now,
+            timestamp: now,
+            action: 'registered',
+            details: 'تسجيل جهاز جديد مع فترة أولية 5 دقائق',
+            performedBy: 'System',
+          },
+        ],
+      };
+
+      if (!isNaN(rawLat) && !isNaN(rawLng)) {
+        device.location = {
+          latitude: rawLat,
+          longitude: rawLng,
+          updatedAt: now,
+          permissionStatus: 'granted',
         };
-        store.devices[deviceId] = device;
-        saveLicenseStore(store);
-      } else {
-        device = {
-          deviceId,
-          firstSeenAt: now,
-          trialDurationMs: TRIAL_DURATION_MS,
-          trialExpiresAt: now + TRIAL_DURATION_MS,
-          isActivated: false,
-          planType: 'trial',
-          lastSeenAt: now,
-          ip: clientIp,
-          deviceName,
+      } else if (permStatus) {
+        device.location = {
+          permissionStatus: permStatus,
+          updatedAt: now,
         };
-        store.devices[deviceId] = device;
-        saveLicenseStore(store);
       }
+
+      store.devices[deviceId] = device;
+      saveLicenseStore(store);
+
+      // Notify Master Admin of new device registration
+      addAdminNotification({
+        type: 'device_activated',
+        deviceId,
+        deviceName,
+        clientName: device.clientName,
+        title: 'تسجيل جهاز جديد في المنظومة 💻',
+        message: `تم رصد وتسجيل جهاز جديد (${deviceName}) برقم: ${deviceId}`,
+        location: device.location,
+      });
     } else {
-      // Update last seen
+      // Update last seen & IP
       device.lastSeenAt = now;
       device.ip = clientIp;
-      if (deviceName) device.deviceName = deviceName;
-      saveLicenseStore(store);
+      if (deviceName && (!device.deviceName || device.deviceName === 'جهاز غير معروف')) {
+        device.deviceName = deviceName;
+      }
+
+      // Update location if provided
+      if (!isNaN(rawLat) && !isNaN(rawLng)) {
+        const prevLoc = device.location;
+        device.location = {
+          latitude: rawLat,
+          longitude: rawLng,
+          address: prevLoc?.address,
+          updatedAt: now,
+          permissionStatus: 'granted',
+        };
+      } else if (permStatus && (!device.location || device.location.permissionStatus !== permStatus)) {
+        device.location = {
+          ...(device.location || {}),
+          permissionStatus: permStatus,
+          updatedAt: now,
+        };
+      }
     }
 
-    // Preserve device ID cookie
-    try {
-      res.setHeader('Set-Cookie', `bk_dev_id=${device.deviceId}; Path=/; Max-Age=31536000; SameSite=Lax`);
-    } catch {}
-
-    // Check status
-    let status: 'trial' | 'active' | 'expired' = 'trial';
-    let isExpired = false;
-    let remainingMs = 0;
-
+    // Master license check
     const isDeviceMaster = Boolean(
-      isMaster ||
       device.licenseKey?.includes('MASTER') ||
       device.licenseKey === 'KING-1993' ||
       device.licenseKey === '1993' ||
@@ -1140,55 +1376,89 @@ app.get('/api/license/status', (req, res) => {
       device.clientName?.includes('M-King')
     );
 
+    let status: 'locked' | 'active' | 'pending' = device.status || 'locked';
+    let remainingMs = 0;
+
     if (isDeviceMaster) {
       status = 'active';
-      isExpired = false;
+      device.status = 'active';
+      device.isActivated = true;
       remainingMs = 999999999999;
-      device.isActivated = true;
-      device.planType = 'lifetime';
-    } else if (device.isActivated || (device.licenseExpiresAt && device.licenseExpiresAt > now)) {
-      device.isActivated = true;
-      if (device.licenseExpiresAt && device.licenseExpiresAt > 0) {
-        if (now > device.licenseExpiresAt) {
-          status = 'expired';
-          isExpired = true;
-          remainingMs = 0;
-        } else {
-          status = 'active';
-          remainingMs = device.licenseExpiresAt - now;
-        }
+    } else if (status === 'locked') {
+      // Strictly remains locked! Never reactivate automatically!
+      device.isActivated = false;
+      remainingMs = 0;
+    } else if (status === 'pending') {
+      device.isActivated = false;
+      remainingMs = 0;
+    } else if (status === 'active') {
+      // Validate expiration against SERVER-SIDE time
+      const expiry = device.activationExpiresAt || device.licenseExpiresAt || device.trialExpiresAt || 0;
+      if (expiry > 0 && now >= expiry) {
+        // Time expired! Lock immediately!
+        status = 'locked';
+        device.status = 'locked';
+        device.isActivated = false;
+        device.activationExpiresAt = 0;
+        device.history = device.history || [];
+        device.history.push({
+          id: 'hist-' + now,
+          timestamp: now,
+          action: 'locked',
+          details: 'انتهت فترة التفعيل المحددة وتم قفل الجهاز تلقائياً من السيرفر',
+          performedBy: 'Server Time Guard',
+        });
+
+        saveLicenseStore(store);
+
+        // Broadcast lock event via SSE to immediately show lock screen on client
+        broadcastDeviceEvent('device_updated', {
+          deviceId: device.deviceId,
+          status: 'locked',
+          isActivated: false,
+          remainingMs: 0,
+          serverTime: now,
+        });
+
+        // Add persistent notification
+        addAdminNotification({
+          type: 'device_locked',
+          deviceId: device.deviceId,
+          deviceName: device.deviceName,
+          clientName: device.clientName,
+          title: 'قفل جهاز لانتهاء المدة ⏱️',
+          message: `انتهت صلاحية تفعيل جهاز ${device.clientName || device.deviceId} وتم قفله تلقائياً.`,
+          location: device.location,
+        });
       } else {
-        // Lifetime license
-        status = 'active';
-        remainingMs = 999999999999;
-      }
-    } else {
-      // In Trial mode
-      if (now > device.trialExpiresAt) {
-        status = 'expired';
-        isExpired = true;
-        remainingMs = 0;
-      } else {
-        status = 'trial';
-        remainingMs = Math.max(0, device.trialExpiresAt - now);
+        remainingMs = expiry > 0 ? Math.max(0, expiry - now) : 999999999999;
+        device.isActivated = true;
       }
     }
+
+    saveLicenseStore(store);
 
     res.json({
       success: true,
       deviceId: device.deviceId,
-      status,
-      isExpired,
-      trialStartedAt: device.firstSeenAt,
-      trialExpiresAt: device.trialExpiresAt,
+      deviceName: device.deviceName,
+      status: device.status,
+      isActivated: device.status === 'active',
+      isExpired: device.status === 'locked',
+      activationStartedAt: device.activationStartedAt,
+      activationExpiresAt: device.activationExpiresAt,
       remainingMs,
+      activationCount: device.activationCount || 0,
+      location: device.location,
+      pendingRequest: device.pendingRequest,
       priceEgp: store.defaultPriceEgp || DEFAULT_LICENSE_PRICE_EGP,
-      planType: device.planType || 'trial',
+      planType: device.planType || 'custom',
       licenseKey: device.licenseKey,
       licenseExpiresAt: device.licenseExpiresAt,
       clientName: device.clientName,
       contactPhone: MASTER_CONTACT_PHONE,
       isMaster: isMaster || isDeviceMaster,
+      serverTime: now,
     });
   } catch (err) {
     console.warn('License status endpoint warning:', err);
@@ -1196,7 +1466,137 @@ app.get('/api/license/status', (req, res) => {
   }
 });
 
-// 2. Activate License Key
+// 2. Client: Request Activation from Master Admin (Persistent Notification & SSE Trigger)
+app.post('/api/license/request-activation', async (req, res) => {
+  try {
+    const { deviceId, clientName, phone, notes, requestedDurationMinutes = 60, location } = req.body || {};
+    if (!deviceId) {
+      res.status(400).json({ success: false, error: 'معرّف الجهاز مطلوب.' });
+      return;
+    }
+
+    const cleanDevice = deviceId.trim().toUpperCase();
+    const store = getLicenseStore();
+    let device = store.devices[cleanDevice];
+    const now = Date.now();
+    const clientIp = ((req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()) || req.socket.remoteAddress || '127.0.0.1';
+
+    if (!device) {
+      device = {
+        deviceId: cleanDevice,
+        firstSeenAt: now,
+        lastSeenAt: now,
+        status: 'pending',
+        isActivated: false,
+        activationCount: 0,
+        planType: 'custom',
+        clientName: clientName?.trim() || 'عميل تجاري',
+        phone: phone?.trim() || '',
+        ip: clientIp,
+        deviceName: parseDeviceName(req.headers['user-agent'] as string || ''),
+        history: [],
+      };
+      store.devices[cleanDevice] = device;
+    }
+
+    // Process Location with reverse geocoding if coordinates supplied
+    let locData: DeviceLocationRecord | undefined = location;
+    if (location && typeof location.latitude === 'number' && typeof location.longitude === 'number') {
+      locData = {
+        latitude: location.latitude,
+        longitude: location.longitude,
+        updatedAt: now,
+        permissionStatus: 'granted',
+      };
+      if (!location.address) {
+        locData.address = await reverseGeocodeCoordinates(location.latitude, location.longitude);
+      } else {
+        locData.address = location.address;
+      }
+    } else if (location && location.permissionStatus) {
+      locData = {
+        permissionStatus: location.permissionStatus,
+        updatedAt: now,
+      };
+    }
+
+    if (locData) {
+      device.location = locData;
+    }
+
+    const requestRecord: ActivationRequestRecord = {
+      id: 'req-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+      deviceId: cleanDevice,
+      deviceName: device.deviceName,
+      clientName: clientName?.trim() || device.clientName || 'عميل تجاري',
+      phone: phone?.trim() || device.phone || '',
+      notes: notes?.trim() || '',
+      requestedAt: now,
+      requestedDurationMinutes: Number(requestedDurationMinutes) || 60,
+      location: device.location,
+      ip: clientIp,
+      status: 'pending',
+    };
+
+    device.status = 'pending';
+    device.isActivated = false;
+    device.pendingRequest = requestRecord;
+    device.lastRequestAt = now;
+    if (clientName) device.clientName = clientName.trim();
+    if (phone) device.phone = phone.trim();
+    if (notes) device.notes = notes.trim();
+
+    device.history = device.history || [];
+    device.history.push({
+      id: 'hist-' + now,
+      timestamp: now,
+      action: 'request_activation',
+      details: `طلب تفعيل لمدة ${requestRecord.requestedDurationMinutes} دقيقة — ${notes ? notes.trim() : 'بدون ملاحظات'}`,
+      performedBy: requestRecord.clientName,
+    });
+
+    saveLicenseStore(store);
+
+    // Create Persistent Notification for Master Admin
+    const notif = addAdminNotification({
+      type: 'activation_request',
+      deviceId: cleanDevice,
+      deviceName: device.deviceName,
+      clientName: requestRecord.clientName,
+      title: 'طلب تفعيل جهاز جديد 🔔',
+      message: `طلب العميل (${requestRecord.clientName}) تفعيل جهازه${notes ? ` — ملاحظات: ${notes}` : ''}`,
+      location: device.location,
+      metadata: {
+        requestId: requestRecord.id,
+        phone: requestRecord.phone,
+        requestedMinutes: requestRecord.requestedDurationMinutes,
+      },
+    });
+
+    // Broadcast SSE to all connected clients & Master Admin
+    broadcastDeviceEvent('device_updated', {
+      deviceId: cleanDevice,
+      status: 'pending',
+      pendingRequest: requestRecord,
+      serverTime: now,
+    });
+    broadcastDeviceEvent('new_activation_request', {
+      request: requestRecord,
+      notification: notif,
+    });
+
+    res.json({
+      success: true,
+      message: 'تم إرسال طلب التفعيل إلى المدير العام بنجاح! طلبك قيد المراجعة حالياً.',
+      request: requestRecord,
+    });
+  } catch (err: any) {
+    console.error('Request activation error:', err);
+    res.status(500).json({ success: false, error: 'حدث خطأ أثناء إرسال طلب التفعيل.' });
+  }
+});
+
+// 3. Activate License Key
 app.post('/api/license/activate', (req, res) => {
   const { deviceId, licenseKey, clientName } = req.body || {};
 
@@ -1224,21 +1624,38 @@ app.post('/api/license/activate', (req, res) => {
     device = {
       deviceId: cleanDevice,
       firstSeenAt: now,
-      trialDurationMs: TRIAL_DURATION_MS,
-      trialExpiresAt: now + (isMasterActivation ? 365 * 24 * 3600000 : TRIAL_DURATION_MS),
+      lastSeenAt: now,
+      status: 'active',
       isActivated: true,
+      activationStartedAt: now,
+      activationExpiresAt: isMasterActivation ? now + 365 * 24 * 3600000 : (verification.expiresAt || now + 365 * 24 * 3600000),
+      activationCount: 1,
+      trialDurationMs: INITIAL_REGISTRATION_DURATION_MS,
+      trialExpiresAt: now + INITIAL_REGISTRATION_DURATION_MS,
       activatedAt: now,
       licenseKey: isMasterActivation ? 'BK-LIC-KING-1993-MASTER-LIFETIME' : cleanKey,
       licenseExpiresAt: isMasterActivation ? 0 : verification.expiresAt,
       planType: isMasterActivation ? 'lifetime' : (verification.planType || 'annual'),
       clientName: clientName?.trim() || (isMasterActivation ? 'جهاز المدير العام (M-King Master)' : 'عميل مرخص'),
-      lastSeenAt: now,
       ip: clientIp,
       deviceName: parseDeviceName(req.headers['user-agent'] as string || ''),
+      history: [
+        {
+          id: 'hist-' + now,
+          timestamp: now,
+          action: 'activated',
+          details: 'تفعيل بواسطة كود الترخيص',
+          performedBy: 'Client Key Entry',
+        },
+      ],
     };
   } else {
+    device.status = 'active';
     device.isActivated = true;
     device.activatedAt = now;
+    device.activationStartedAt = now;
+    device.activationExpiresAt = isMasterActivation ? now + 365 * 24 * 3600000 : (verification.expiresAt || now + 365 * 24 * 3600000);
+    device.activationCount = (device.activationCount || 0) + 1;
     device.licenseKey = isMasterActivation ? 'BK-LIC-KING-1993-MASTER-LIFETIME' : cleanKey;
     device.licenseExpiresAt = isMasterActivation ? 0 : verification.expiresAt;
     device.planType = isMasterActivation ? 'lifetime' : (verification.planType || 'annual');
@@ -1247,7 +1664,16 @@ app.post('/api/license/activate', (req, res) => {
     } else if (isMasterActivation) {
       device.clientName = 'جهاز المدير العام (M-King Master)';
     }
+    device.pendingRequest = null;
     device.lastSeenAt = now;
+    device.history = device.history || [];
+    device.history.push({
+      id: 'hist-' + now,
+      timestamp: now,
+      action: 'activated',
+      details: 'تفعيل بواسطة كود الترخيص',
+      performedBy: 'Client Key Entry',
+    });
   }
 
   store.devices[cleanDevice] = device;
@@ -1257,6 +1683,18 @@ app.post('/api/license/activate', (req, res) => {
     store.licenses[cleanKey].usedAt = now;
     store.licenses[cleanKey].deviceId = cleanDevice;
   }
+
+  saveLicenseStore(store);
+
+  // Broadcast activation via SSE
+  broadcastDeviceEvent('device_updated', {
+    deviceId: cleanDevice,
+    status: 'active',
+    isActivated: true,
+    activationExpiresAt: device.activationExpiresAt,
+    remainingMs: (device.activationExpiresAt || 0) - now,
+    serverTime: now,
+  });
 
   saveLicenseStore(store);
 
@@ -1332,7 +1770,11 @@ app.post('/api/license/master-bypass', (req, res) => {
       firstSeenAt: now,
       trialDurationMs: TRIAL_DURATION_MS,
       trialExpiresAt: now + 365 * 24 * 3600000,
+      status: 'active',
       isActivated: true,
+      activationStartedAt: now,
+      activationExpiresAt: now + 365 * 24 * 3600000,
+      activationCount: 1,
       activatedAt: now,
       licenseKey: 'BK-LIC-KING-1993-MASTER-LIFETIME',
       licenseExpiresAt: 0, // Lifetime
@@ -1341,10 +1783,15 @@ app.post('/api/license/master-bypass', (req, res) => {
       lastSeenAt: now,
       ip: req.socket.remoteAddress || '127.0.0.1',
       deviceName: parseDeviceName(req.headers['user-agent'] as string || ''),
+      history: [{ id: 'hist-' + now, timestamp: now, action: 'activated', details: 'تفعيل دائم بواسطة كود PIN المدير العام', performedBy: 'Master Admin' }],
     };
     store.devices[cleanDevice] = device;
   } else if (device) {
+    device.status = 'active';
     device.isActivated = true;
+    device.activationStartedAt = now;
+    device.activationExpiresAt = now + 365 * 24 * 3600000;
+    device.activationCount = (device.activationCount || 0) + 1;
     device.activatedAt = now;
     device.licenseKey = 'BK-LIC-KING-1993-MASTER-LIFETIME';
     device.licenseExpiresAt = 0;
@@ -1453,60 +1900,61 @@ app.get('/api/license/admin/devices', (req, res) => {
   const now = Date.now();
 
   const devicesList = Object.values(store.devices).map(d => {
-    let status: 'trial' | 'active' | 'expired' = 'trial';
+    let status: 'locked' | 'active' | 'pending' = d.status || (d.isActivated ? 'active' : 'locked');
     let remainingMs = 0;
 
-    if (d.isActivated) {
-      if (d.licenseExpiresAt && d.licenseExpiresAt > 0) {
-        if (now > d.licenseExpiresAt) {
-          status = 'expired';
-          remainingMs = 0;
-        } else {
-          status = 'active';
-          remainingMs = d.licenseExpiresAt - now;
-        }
-      } else {
-        status = 'active';
-        remainingMs = 999999999999;
-      }
-    } else {
-      if (now > d.trialExpiresAt) {
-        status = 'expired';
+    if (status === 'active') {
+      const expiry = d.activationExpiresAt || d.licenseExpiresAt || d.trialExpiresAt || 0;
+      if (expiry > 0 && now >= expiry) {
+        status = 'locked';
+        d.status = 'locked';
+        d.isActivated = false;
         remainingMs = 0;
       } else {
-        status = 'trial';
-        remainingMs = Math.max(0, d.trialExpiresAt - now);
+        remainingMs = expiry > 0 ? Math.max(0, expiry - now) : 999999999999;
       }
+    } else {
+      remainingMs = 0;
     }
 
     return {
       ...d,
       status,
+      isActivated: status === 'active',
       remainingMs,
+      activationCount: d.activationCount || (d.isActivated ? 1 : 0),
+      history: d.history || [],
     };
   });
 
+  saveLicenseStore(store);
+
   const licensesList = Object.values(store.licenses).sort((a, b) => b.createdAt - a.createdAt);
+  const notifs = getNotifications();
+  const unreadNotifs = notifs.filter(n => !n.read).length;
 
   res.json({
     success: true,
     totalDevices: devicesList.length,
     activeCount: devicesList.filter(d => d.status === 'active').length,
-    trialCount: devicesList.filter(d => d.status === 'trial').length,
-    expiredCount: devicesList.filter(d => d.status === 'expired').length,
+    lockedCount: devicesList.filter(d => d.status === 'locked').length,
+    pendingCount: devicesList.filter(d => d.status === 'pending').length,
+    unreadNotificationsCount: unreadNotifs,
     devices: devicesList.sort((a, b) => b.lastSeenAt - a.lastSeenAt),
     licenses: licensesList,
+    notifications: notifs.slice(0, 50),
+    serverTime: now,
   });
 });
 
-// 6. Admin: Remote Action on Device (Instant activate, extend trial, or reset)
+// 6. Admin: Remote Action on Device (Lock, Activate with custom duration, Add Time, Reset Device)
 app.post('/api/license/admin/device-action', (req, res) => {
   if (!isCallerMasterAdmin(req)) {
     res.status(403).json({ success: false, error: 'غير مصرح لك.' });
     return;
   }
 
-  const { action, deviceId, extraHours = 24, clientName } = req.body || {};
+  const { action, deviceId, durationMinutes = 60, addMinutes = 60, clientName, notes } = req.body || {};
   if (!deviceId) {
     res.status(400).json({ success: false, error: 'كود الجهاز مطلوب.' });
     return;
@@ -1522,51 +1970,284 @@ app.post('/api/license/admin/device-action', (req, res) => {
   }
 
   const now = Date.now();
+  device.history = device.history || [];
 
-  if (action === 'extend_trial') {
-    const additionalMs = Number(extraHours) * 3600000;
-    const baseTime = Math.max(now, device.trialExpiresAt);
-    device.trialExpiresAt = baseTime + additionalMs;
+  // Action 1: LOCK DEVICE IMMEDIATELY
+  if (action === 'lock' || action === 'revoke') {
+    device.status = 'locked';
     device.isActivated = false;
-    device.planType = 'trial';
-    saveLicenseStore(store);
-    res.json({
-      success: true,
-      message: `تم تمديد الفترة التجريبية للجهاز ${cleanDevice} بمقدار ${extraHours} ساعة بنجاح!`,
-      newTrialExpiresAt: device.trialExpiresAt,
+    device.activationExpiresAt = 0;
+    device.pendingRequest = null;
+    device.history.push({
+      id: 'hist-' + now,
+      timestamp: now,
+      action: 'locked',
+      details: notes || 'تم قفل الجهاز فورياً بواسطة المدير العام',
+      performedBy: 'Master Admin',
     });
-    return;
-  }
 
-  if (action === 'instant_activate') {
-    device.isActivated = true;
-    device.activatedAt = now;
-    device.licenseExpiresAt = now + 365 * 24 * 3600000; // 1 year
-    device.planType = 'annual';
-    device.licenseKey = `BK-ADMIN-INSTANT-${cleanDevice.slice(-4)}`;
-    if (clientName) device.clientName = clientName;
     saveLicenseStore(store);
+
+    // Real-time broadcast to instantly lock the client device without reload
+    broadcastDeviceEvent('device_updated', {
+      deviceId: cleanDevice,
+      status: 'locked',
+      isActivated: false,
+      remainingMs: 0,
+      serverTime: now,
+    });
+
+    addAdminNotification({
+      type: 'device_locked',
+      deviceId: cleanDevice,
+      deviceName: device.deviceName,
+      clientName: device.clientName,
+      title: 'قفل جهاز 🔒',
+      message: `تم قفل الجهاز ${cleanDevice} بنجاح من لوحة الإدارة.`,
+      location: device.location,
+    });
+
     res.json({
       success: true,
-      message: `تم التفعيل المباشر للجهاز ${cleanDevice} لمدة سنة كاملة بنجاح!`,
+      message: `تم قفل الجهاز ${cleanDevice} فوراً على صفحة العميل.`,
       device,
     });
     return;
   }
 
-  if (action === 'revoke') {
-    device.isActivated = false;
-    device.trialExpiresAt = now - 1000; // Expired immediately
-    device.planType = 'trial';
+  // Action 2: ACTIVATE DEVICE WITH SPECIFIC DURATION
+  if (action === 'activate' || action === 'instant_activate') {
+    const mins = Number(durationMinutes) || 60;
+    const durationMs = mins * 60 * 1000;
+
+    device.status = 'active';
+    device.isActivated = true;
+    device.activationStartedAt = now;
+    device.activationExpiresAt = now + durationMs;
+    device.activationCount = (device.activationCount || 0) + 1;
+    device.pendingRequest = null;
+    if (clientName) device.clientName = clientName.trim();
+    if (!device.licenseKey) {
+      device.licenseKey = `BK-ACTIVATED-${cleanDevice.slice(-4)}`;
+    }
+
+    device.history.push({
+      id: 'hist-' + now,
+      timestamp: now,
+      action: 'activated',
+      details: `تفعيل الجهاز لمدة ${mins} دقيقة (${(mins / 60).toFixed(1)} ساعة)`,
+      performedBy: 'Master Admin',
+    });
+
     saveLicenseStore(store);
+
+    // Real-time broadcast to instantly unlock the client device without reload
+    broadcastDeviceEvent('device_updated', {
+      deviceId: cleanDevice,
+      status: 'active',
+      isActivated: true,
+      activationStartedAt: now,
+      activationExpiresAt: device.activationExpiresAt,
+      remainingMs: durationMs,
+      serverTime: now,
+    });
+
+    addAdminNotification({
+      type: 'device_activated',
+      deviceId: cleanDevice,
+      deviceName: device.deviceName,
+      clientName: device.clientName,
+      title: 'تفعيل جهاز 🚀',
+      message: `تم تفعيل الجهاز ${cleanDevice} لمدة ${mins} دقيقة بنجاح.`,
+      location: device.location,
+    });
+
     res.json({
       success: true,
-      message: `تم إيقاف تفعيل الجهاز ${cleanDevice} وحظره بنجاح.`,
+      message: `تم تفعيل الجهاز ${cleanDevice} لمدة ${mins} دقيقة بنجاح!`,
+      device,
+    });
+    return;
+  }
+
+  // Action 3: ADD TIME / EXTEND TIME
+  if (action === 'add_time' || action === 'extend_time') {
+    const mins = Number(addMinutes) || 60;
+    const extraMs = mins * 60 * 1000;
+    const baseTime = Math.max(now, device.activationExpiresAt || now);
+
+    device.status = 'active';
+    device.isActivated = true;
+    device.activationExpiresAt = baseTime + extraMs;
+    if (!device.activationStartedAt) device.activationStartedAt = now;
+
+    device.history.push({
+      id: 'hist-' + now,
+      timestamp: now,
+      action: 'time_added',
+      details: `إضافة ${mins} دقيقة للوقت المتبقي`,
+      performedBy: 'Master Admin',
+    });
+
+    saveLicenseStore(store);
+
+    const remainingMs = device.activationExpiresAt - now;
+
+    // Real-time broadcast to update countdown on client device
+    broadcastDeviceEvent('device_updated', {
+      deviceId: cleanDevice,
+      status: 'active',
+      isActivated: true,
+      activationExpiresAt: device.activationExpiresAt,
+      remainingMs,
+      serverTime: now,
+    });
+
+    res.json({
+      success: true,
+      message: `تمت إضافة ${mins} دقيقة للجهاز ${cleanDevice} بنجاح!`,
+      device,
+    });
+    return;
+  }
+
+  // Action 4: RESET DEVICE (Lock immediately, revoke token, but preserve history & data)
+  if (action === 'reset' || action === 'clear_device') {
+    device.status = 'locked';
+    device.isActivated = false;
+    device.activationExpiresAt = 0;
+    device.licenseKey = undefined; // Invalidate active token
+    device.pendingRequest = null;
+
+    device.history.push({
+      id: 'hist-' + now,
+      timestamp: now,
+      action: 'reset',
+      details: 'إعادة تعيين وقفل الجهاز بواسطة المدير العام (تم إبطال التوكن مع الحفاظ على السجل)',
+      performedBy: 'Master Admin',
+    });
+
+    saveLicenseStore(store);
+
+    // Real-time broadcast to instantly lock client page
+    broadcastDeviceEvent('device_updated', {
+      deviceId: cleanDevice,
+      status: 'locked',
+      isActivated: false,
+      remainingMs: 0,
+      serverTime: now,
+    });
+
+    addAdminNotification({
+      type: 'device_reset',
+      deviceId: cleanDevice,
+      deviceName: device.deviceName,
+      clientName: device.clientName,
+      title: 'إعادة تعيين جهاز 🔄',
+      message: `تم عمل Reset للجهاز ${cleanDevice} وقفله فوراً على صفحة العميل.`,
+      location: device.location,
+    });
+
+    res.json({
+      success: true,
+      message: `تمت إعادة تعيين الجهاز ${cleanDevice} وقفله فوراً من صفحة العميل، مع الحفاظ على بيانات وسجل الجهاز في قاعدة البيانات.`,
+      device,
+    });
+    return;
+  }
+
+  // Action 5: REJECT PENDING ACTIVATION REQUEST
+  if (action === 'reject_request') {
+    device.status = 'locked';
+    device.pendingRequest = null;
+    device.history.push({
+      id: 'hist-' + now,
+      timestamp: now,
+      action: 'locked',
+      details: 'رفض طلب التفعيل بواسطة المدير العام',
+      performedBy: 'Master Admin',
+    });
+
+    saveLicenseStore(store);
+
+    broadcastDeviceEvent('device_updated', {
+      deviceId: cleanDevice,
+      status: 'locked',
+      pendingRequest: null,
+      serverTime: now,
+    });
+
+    res.json({
+      success: true,
+      message: `تم رفض طلب تفعيل الجهاز ${cleanDevice}.`,
+      device,
     });
     return;
   }
 
   res.status(400).json({ success: false, error: 'إجراء غير معروف.' });
+});
+
+// 7. Persistent Admin Notifications Management Endpoints
+app.get('/api/admin/notifications', (req, res) => {
+  if (!isCallerMasterAdmin(req)) {
+    res.status(403).json({ success: false, error: 'غير مصرح لك.' });
+    return;
+  }
+
+  const notifs = getNotifications();
+  const unreadCount = notifs.filter(n => !n.read).length;
+
+  res.json({
+    success: true,
+    notifications: notifs,
+    unreadCount,
+    totalCount: notifs.length,
+  });
+});
+
+app.post('/api/admin/notifications/mark-read', (req, res) => {
+  if (!isCallerMasterAdmin(req)) {
+    res.status(403).json({ success: false, error: 'غير مصرح لك.' });
+    return;
+  }
+
+  const { id } = req.body || {};
+  const notifs = getNotifications();
+
+  if (id === 'all' || !id) {
+    notifs.forEach(n => { n.read = true; });
+  } else {
+    const target = notifs.find(n => n.id === id);
+    if (target) target.read = true;
+  }
+
+  saveNotifications(notifs);
+  res.json({ success: true, message: 'تم تحديث حالة الإشعارات.' });
+});
+
+app.delete('/api/admin/notifications/:id', (req, res) => {
+  if (!isCallerMasterAdmin(req)) {
+    res.status(403).json({ success: false, error: 'غير مصرح لك.' });
+    return;
+  }
+
+  const { id } = req.params;
+  let notifs = getNotifications();
+  notifs = notifs.filter(n => n.id !== id);
+  saveNotifications(notifs);
+
+  res.json({ success: true, message: 'تم حذف الإشعار.' });
+});
+
+app.post('/api/admin/notifications/clear', (req, res) => {
+  if (!isCallerMasterAdmin(req)) {
+    res.status(403).json({ success: false, error: 'غير مصرح لك.' });
+    return;
+  }
+
+  saveNotifications([]);
+  res.json({ success: true, message: 'تم مسح جميع الإشعارات بنجاح.' });
 });
 
 // ==================== AI RECONCILIATION API (GEMINI OCR) ====================

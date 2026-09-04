@@ -34,7 +34,7 @@ import {
   recomputeReconciliationSummary,
 } from './utils/excel';
 import { getStoredUser, apiLogout, apiVerifySession } from './utils/auth';
-import { apiCheckLicense } from './utils/license';
+import { apiCheckLicense, subscribeToLicenseEvents } from './utils/license';
 import { UserProfileModal } from './components/UserProfileModal';
 import { PaywallLockScreen } from './components/PaywallLockScreen';
 import { TrialBanner } from './components/TrialBanner';
@@ -80,9 +80,34 @@ export default function App() {
 
   useEffect(() => {
     fetchLicenseStatus();
-    // Poll license status every 30 seconds to enforce real-time 24h expiration
-    const interval = setInterval(fetchLicenseStatus, 30000);
-    return () => clearInterval(interval);
+
+    // Subscribe to real-time events via Server-Sent Events (SSE)
+    // Instant lock / unlock when Master Admin performs actions remotely
+    const unsubscribe = subscribeToLicenseEvents((type, data) => {
+      if (data && data.deviceId) {
+        setLicenseInfo(prev => {
+          if (!prev || prev.deviceId !== data.deviceId) return prev;
+          const isExpired = data.status === 'locked' || (data.remainingMs <= 0);
+          return {
+            ...prev,
+            status: data.status,
+            isActivated: data.isActivated,
+            isExpired,
+            remainingMs: data.remainingMs ?? prev.remainingMs,
+            activationStartedAt: data.activationStartedAt ?? prev.activationStartedAt,
+            activationExpiresAt: data.activationExpiresAt ?? prev.activationExpiresAt,
+          };
+        });
+      }
+    });
+
+    // Fallback polling every 20 seconds to keep server-authoritative time synchronized
+    const interval = setInterval(fetchLicenseStatus, 20000);
+
+    return () => {
+      clearInterval(interval);
+      unsubscribe();
+    };
   }, [currentUser]);
 
   // Periodic session heartbeat & remote kick verification across devices
@@ -769,8 +794,17 @@ export default function App() {
     );
   }
 
-  // 2. HARD PAYWALL LOCK: If device 24h trial has expired and user is NOT Master Admin
-  if (licenseInfo?.isExpired && !isMasterUser) {
+  // 2. HARD PAYWALL LOCK: If device is locked, pending activation, or trial expired, and user is NOT Master Admin
+  const isDeviceLocked =
+    Boolean(
+      licenseInfo &&
+        (licenseInfo.status === 'locked' ||
+          licenseInfo.status === 'pending' ||
+          licenseInfo.isExpired ||
+          (!licenseInfo.isActivated && licenseInfo.remainingMs <= 0))
+    ) && !isMasterUser;
+
+  if (isDeviceLocked && licenseInfo) {
     return (
       <PaywallLockScreen
         licenseInfo={licenseInfo}

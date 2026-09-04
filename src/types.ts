@@ -243,44 +243,107 @@ export interface ReconciliationSummary {
   excelPaymentSummary?: ExcelPaymentSummary;
 }
 
+export interface DeviceLocationInfo {
+  latitude?: number;
+  longitude?: number;
+  address?: string;
+  updatedAt?: number;
+  permissionStatus: 'granted' | 'denied' | 'unavailable' | 'prompt';
+}
+
+export interface ActivationRequest {
+  id: string;
+  deviceId: string;
+  deviceName?: string;
+  clientName?: string;
+  phone?: string;
+  notes?: string;
+  requestedAt: number;
+  requestedDurationMinutes?: number;
+  location?: DeviceLocationInfo;
+  ip?: string;
+  status: 'pending' | 'approved' | 'rejected';
+}
+
+export interface DeviceHistoryEvent {
+  id: string;
+  timestamp: number;
+  action: 'registered' | 'request_activation' | 'activated' | 'time_added' | 'locked' | 'reset';
+  details?: string;
+  performedBy?: string;
+}
+
 export interface DeviceLicenseInfo {
   deviceId: string;
-  status: 'trial' | 'active' | 'expired';
+  status: 'locked' | 'active' | 'pending' | 'trial' | 'expired';
   isExpired: boolean;
-  trialStartedAt: number;
-  trialExpiresAt: number;
+  isActivated: boolean;
+  trialStartedAt?: number;
+  trialExpiresAt?: number;
+  activationStartedAt?: number;
+  activationExpiresAt?: number;
   remainingMs: number;
   priceEgp: number;
-  planType?: 'trial' | 'annual' | 'lifetime' | 'monthly' | 'semi_annual' | 'custom';
+  planType?: 'trial' | 'annual' | 'lifetime' | 'monthly' | 'semi_annual' | 'custom' | string;
   licenseKey?: string;
   licenseExpiresAt?: number;
   clientName?: string;
+  deviceName?: string;
   contactPhone: string;
   isMaster: boolean;
   activatedAt?: number;
+  activationCount?: number;
+  location?: DeviceLocationInfo;
+  pendingRequest?: ActivationRequest | null;
+  serverTime?: number;
 }
 
 export interface StoredDeviceEntry {
   deviceId: string;
   firstSeenAt: number;
-  trialExpiresAt: number;
-  remainingMs: number;
-  status: 'trial' | 'active' | 'expired';
+  lastSeenAt: number;
+  status: 'locked' | 'active' | 'pending' | 'trial' | 'expired';
   isActivated: boolean;
+  remainingMs: number;
+  trialDurationMs?: number;
+  trialExpiresAt?: number;
+  activationStartedAt?: number;
+  activationExpiresAt?: number;
+  activationCount?: number;
   licenseKey?: string;
   licenseExpiresAt?: number;
   planType?: string;
   clientName?: string;
+  branchName?: string;
+  phone?: string;
+  notes?: string;
   ip: string;
   deviceName: string;
-  lastSeenAt: number;
+  location?: DeviceLocationInfo;
+  pendingRequest?: ActivationRequest | null;
+  lastRequestAt?: number;
+  history?: DeviceHistoryEvent[];
+}
+
+export interface AdminNotification {
+  id: string;
+  type: 'activation_request' | 'device_locked' | 'device_activated' | 'device_reset';
+  deviceId: string;
+  deviceName?: string;
+  clientName?: string;
+  title: string;
+  message: string;
+  createdAt: number;
+  read: boolean;
+  location?: DeviceLocationInfo;
+  metadata?: Record<string, any>;
 }
 
 export interface GeneratedLicenseRecord {
   key: string;
   deviceId: string;
   clientName: string;
-  planType: 'annual' | 'lifetime' | 'monthly' | 'custom';
+  planType: 'annual' | 'lifetime' | 'monthly' | 'semi_annual' | 'custom';
   priceEgp: number;
   createdAt: number;
   expiresAt: number;
@@ -289,4 +352,5 @@ export interface GeneratedLicenseRecord {
   usedAt?: number;
   isActive: boolean;
 }
+
 

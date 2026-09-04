@@ -1,7 +1,9 @@
 {
   "name": "BURGER KING — Aloha & Talabat Audit System",
   "description": "Professional financial reconciliation and audit system for BURGER KING Aloha POS checks and Talabat delivery platform reports.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": [
+    "geolocation"
+  ],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]

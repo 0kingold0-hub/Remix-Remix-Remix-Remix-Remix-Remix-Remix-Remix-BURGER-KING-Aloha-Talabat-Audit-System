@@ -1,8 +1,39 @@
-import { DeviceLicenseInfo, GeneratedLicenseRecord, StoredDeviceEntry } from '../types';
+import { AdminNotification, DeviceLicenseInfo, GeneratedLicenseRecord, StoredDeviceEntry } from '../types';
 import { getStoredToken, setStoredToken, setStoredUser } from './auth';
 
 const DEVICE_ID_KEY = 'bk_hardware_device_id_v3';
 const MASTER_CONTACT_PHONE = '01100051593';
+
+// Geolocation helper - asks user's browser with real GPS/Network coords without fake data
+export async function getClientGeolocation(): Promise<{
+  latitude?: number;
+  longitude?: number;
+  permissionStatus: 'granted' | 'denied' | 'unavailable' | 'prompt';
+}> {
+  if (typeof window === 'undefined' || !navigator.geolocation) {
+    return { permissionStatus: 'unavailable' };
+  }
+
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        resolve({
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          permissionStatus: 'granted',
+        });
+      },
+      (err) => {
+        if (err.code === err.PERMISSION_DENIED) {
+          resolve({ permissionStatus: 'denied' });
+        } else {
+          resolve({ permissionStatus: 'unavailable' });
+        }
+      },
+      { enableHighAccuracy: true, timeout: 7000, maximumAge: 60000 }
+    );
+  });
+}
 
 // Compute 100% deterministic device fingerprint without random generators
 function computeDeterministicFingerprint(): string {
@@ -204,6 +235,7 @@ export async function apiCheckLicense(deviceId?: string): Promise<DeviceLicenseI
   return {
     deviceId: finalId,
     status: remainingMs <= 0 ? 'expired' : 'trial',
+    isActivated: false,
     isExpired: remainingMs <= 0,
     trialStartedAt: fallbackExpiresAt - 24 * 3600 * 1000,
     trialExpiresAt: fallbackExpiresAt,
@@ -366,11 +398,16 @@ export async function apiAdminGetDevices(): Promise<{
 
 // 6. Admin: Remote Action
 export async function apiAdminDeviceAction(
-  action: 'extend_trial' | 'instant_activate' | 'revoke',
+  action: 'lock' | 'activate' | 'add_time' | 'reset' | 'reject_request' | 'extend_trial' | 'instant_activate' | 'revoke',
   deviceId: string,
-  extraHours = 24,
-  clientName?: string
-): Promise<{ success: boolean; message?: string; error?: string }> {
+  params?: {
+    durationMinutes?: number;
+    addMinutes?: number;
+    clientName?: string;
+    notes?: string;
+    extraHours?: number;
+  }
+): Promise<{ success: boolean; message?: string; error?: string; device?: any }> {
   const token = getStoredToken();
   try {
     const res = await fetch('/api/license/admin/device-action', {
@@ -382,14 +419,140 @@ export async function apiAdminDeviceAction(
       body: JSON.stringify({
         action,
         deviceId,
-        extraHours,
-        clientName,
+        durationMinutes: params?.durationMinutes,
+        addMinutes: params?.addMinutes,
+        clientName: params?.clientName,
+        notes: params?.notes,
+        extraHours: params?.extraHours,
       }),
     });
     const data = await res.json();
     return data;
   } catch {
     return { success: false, error: 'تعذر تنفيذ الإجراء على الجهاز.' };
+  }
+}
+
+// 7. Admin Notifications
+export async function apiGetAdminNotifications(): Promise<{
+  success: boolean;
+  notifications: AdminNotification[];
+  unreadCount: number;
+  totalCount: number;
+}> {
+  const token = getStoredToken();
+  try {
+    const res = await fetch('/api/admin/notifications', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    return await res.json();
+  } catch {
+    return { success: false, notifications: [], unreadCount: 0, totalCount: 0 };
+  }
+}
+
+export async function apiMarkNotificationRead(id?: string): Promise<{ success: boolean }> {
+  const token = getStoredToken();
+  try {
+    const res = await fetch('/api/admin/notifications/mark-read', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ id }),
+    });
+    return await res.json();
+  } catch {
+    return { success: false };
+  }
+}
+
+export async function apiDeleteNotification(id: string): Promise<{ success: boolean }> {
+  const token = getStoredToken();
+  try {
+    const res = await fetch(`/api/admin/notifications/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    return await res.json();
+  } catch {
+    return { success: false };
+  }
+}
+
+export async function apiClearNotifications(): Promise<{ success: boolean }> {
+  const token = getStoredToken();
+  try {
+    const res = await fetch('/api/admin/notifications/clear', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    return await res.json();
+  } catch {
+    return { success: false };
+  }
+}
+
+// 8. Real-time Server-Sent Events (SSE) Hub
+export function subscribeToLicenseEvents(onEvent: (type: string, data: any) => void): () => void {
+  if (typeof window === 'undefined' || !window.EventSource) {
+    return () => {};
+  }
+  let es: EventSource | null = null;
+  try {
+    es = new EventSource('/api/license/events');
+    es.onmessage = (e) => {
+      try {
+        const payload = JSON.parse(e.data);
+        if (payload && payload.type) {
+          onEvent(payload.type, payload.data);
+        }
+      } catch {}
+    };
+  } catch {}
+
+  return () => {
+    if (es) {
+      es.close();
+      es = null;
+    }
+  };
+}
+
+// 2b. Request Activation from Master Admin (Client Side)
+export async function apiSendActivationRequest(params: {
+  deviceId?: string;
+  clientName: string;
+  phone?: string;
+  notes?: string;
+  requestedDurationMinutes?: number;
+  location?: { latitude?: number; longitude?: number; permissionStatus: 'granted' | 'denied' | 'unavailable' | 'prompt' };
+}): Promise<{ success: boolean; message: string; request?: any }> {
+  const finalId = params.deviceId || getOrCreateDeviceId();
+  try {
+    const res = await fetch('/api/license/request-activation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deviceId: finalId,
+        clientName: params.clientName,
+        phone: params.phone,
+        notes: params.notes,
+        requestedDurationMinutes: params.requestedDurationMinutes || 60,
+        location: params.location,
+      }),
+    });
+    const data = await res.json();
+    return data;
+  } catch {
+    return { success: false, message: 'تعذر إرسال طلب التفعيل إلى السيرفر.' };
   }
 }
 
